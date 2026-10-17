@@ -1,0 +1,17 @@
+# Java
+backend/target/
+*.class
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 运行时数据/日志/环境变量
+data/
+*.log
+.env

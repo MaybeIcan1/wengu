@@ -1,0 +1,64 @@
+name: wengu
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: wg-mysql
+    restart: unless-stopped
+    ports:
+      - "3307:3306"          # 宿主机3307 -> 容器3306，避开本机已装的MySQL 9.5
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: wengu   # 首次启动自动建库
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot123"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: wg-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass redis123 --appendonly yes
+    volumes:
+      - redis-data:/data
+
+  rocketmq-namesrv:
+    image: apache/rocketmq:5.3.1
+    container_name: wg-rmq-namesrv
+    restart: unless-stopped
+    ports:
+      - "9876:9876"
+    environment:
+      JAVA_OPT_EXT: "-Xms512m -Xmx512m -Xmn256m"   # 官方脚本默认要4G堆，16G内存机器必须限制
+    command: sh mqnamesrv
+
+  rocketmq-broker:
+    image: apache/rocketmq:5.3.1
+    container_name: wg-rmq-broker
+    restart: unless-stopped
+    ports:
+      - "10909:10909"
+      - "10911:10911"
+      - "10912:10912"
+    depends_on:
+      - rocketmq-namesrv
+    environment:
+      JAVA_OPT_EXT: "-Xms1g -Xmx1g -Xmn512m"
+    volumes:
+      - ./broker.conf:/home/rocketmq/broker.conf
+    command: sh mqbroker -n wg-rmq-namesrv:9876 -c /home/rocketmq/broker.conf
+
+volumes:
+  mysql-data:
+  redis-data:
