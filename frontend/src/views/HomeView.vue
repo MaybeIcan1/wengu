@@ -84,25 +84,37 @@ function logout() {
 <style scoped>
 .shell { height: 100vh }
 .side {
-  background: #fbf7f1;
-  border-right: 1px solid #f0e7d9;
+  background: var(--card);
+  border-right: 1px solid var(--line);
   padding: 18px 10px;
   display: flex; flex-direction: column; gap: 4px;
 }
-.brand { font-weight: 700; color: #b3563d; font-size: 18px; padding: 6px 10px; cursor: pointer }
-.cat-title { font-size: 12px; color: #a08a76; padding: 10px 10px 4px }
+.brand { font-weight: 700; color: var(--brand-deep); font-size: 18px; padding: 6px 10px; cursor: pointer }
+.cat-title { font-size: 12px; color: var(--ink-soft); padding: 10px 10px 4px }
 .cat-item {
   padding: 8px 10px; border-radius: 8px; cursor: pointer;
   display: flex; justify-content: space-between; align-items: center;
   color: #6b584a; font-size: 14px;
 }
 .cat-item:hover { background: #f5ecdf }
-.cat-item.active { background: #fdeadd; color: #c25b34; font-weight: 600 }
+.cat-item.active { background: var(--brand-bg); color: #c25b34; font-weight: 600 }
 .cnt { font-size: 12px; color: #b09a82 }
 .add-cat { margin-top: 8px; align-self: flex-start }
 .head {
   display: flex; align-items: center; gap: 12px;
-  border-bottom: 1px solid #f0e7d9; background: #fffdf9;
+  border-bottom: 1px solid var(--line); background: var(--card);
 }
 .hello { flex: 1; color: #8a7663; font-size: 13px }
+
+/* ---- 响应式：手机断点（<768px 纵向堆叠、侧栏变顶部横条） ---- */
+@media (max-width: 768px) {
+  .shell { height: auto; min-height: 100vh }
+  .side { width: 100% !important; flex-direction: row; overflow-x: auto;
+          border-right: none; border-bottom: 1px solid var(--line); padding: 10px }
+  .brand { display: none }
+  .cat-title { display: none }
+  .cat-item { flex: 0 0 auto }
+  .add-cat { display: none }
+  .hello { display: none }
+}
 </style>
