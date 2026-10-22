@@ -223,24 +223,60 @@ public interface ImportDraftMapper extends BaseMapper<ImportDraft> {}
 
 ## 3️⃣ 业务编排层（结束时：一次解析能产出可确认的草稿集）
 
-### 3.1 解析三段式：Block 提取 → Segmenter 决策 → Assembler 装配（v3，为 LLM 预留）
+### 3.1 把"拆题"拆开写：先抽块，再决策，最后装配（v3，为 LLM 预留插槽）
 
-**为什么先拆成三层？**（这是本章最重要的架构决策）
+**① 我们现在要干嘛**
+
+上一层已经把任务排进队列、文件落盘、消费者就位。现在要解决本章最核心的业务问题：**一份 3MB 的 docx，怎么变成 N 条可确认的草稿？**
+
+直觉做法是写一个 `DocxParser.parse()`，把"读段落、判标题、收表格、拼答案、兜散记"全塞进去（v2 版本就是如此）。它能跑，但你已经能预见两个会疼的地方：
+
+- **将来要接 LLM 拆题**：只能在那几百行里塞 if-else，规则与模型逻辑纠缠——测不了、关不掉、回滚难
+- **要调规则参数**：段落搬运和"什么算一道题"的判断混在一起，改一个阈值都怕碰坏抽取
+
+**② 设计思路（两个候选对比）**
+
+| 方案 | 长相 | 问题 |
+|---|---|---|
+| A. 单类解析器 | `parse(docx)` 内完成全部 | 换策略=改核心；无法单测决策；LLM 只能硬塞 |
+| **B. 三层流水线（本章采用）** | 抽取（确定性）→ 决策（可替换）→ 装配（纯拼接） | 多 4 个小类，但每层可单独测、可单独换 |
+
+选 B 的三个理由：
+
+1. **LLM 未来只碰中间那层**——它输出的是 `[{titleIndex:13,end:16},…]` 这种**索引级决策**，物理上无法改写你的八股原文（比在提示词里写"不要改动内容"可靠得多）
+2. 换策略（规则 → 本地模型 → 云端决策模型）不动抽取与装配，是"策略模式"的教科书落地点
+3. 规则版可以**不依赖 MQ 单独验收**：给它一段 docx，看拆出来的草稿质量，不满意现在就能调
 
 ```
 POI 原始文档
-   ↓ BlockExtractor（确定性：抽取段落/表格/代码/图片 → 带序号的块列表）
+   ↓ BlockExtractor（确定性：段落/表格/代码/图片 → 带序号的块列表）
 List<Block>
-   ↓ Segmenter（决策层：只回答"哪几块组成一道题"——索引级判断）
+   ↓ Segmenter（决策层：只回答"哪几块组成一道题"）
 List<Segment>
    ↓ QuestionAssembler（装配层：按索引把原文拼成草稿，逐字不改）
 List<ParsedQuestion> → t_import_draft
 ```
 
-好处：
-1. **LLM 未来只碰 Segmenter 这一层**——它输出的是 `[{titleIndex:13,end:16},…]` 这种索引决策，天然无法改写你的八股原文（零幻觉面）
-2. 换策略（规则 → 本地模型 → Jev）不动抽取与装配，符合"策略模式"的教科书用法
-3. 规则版可单独验收；LLM 版上线时能做 A/B（`rule` vs `llm` 配置切换）
+**③ 缺什么（文件清单，全部新建在 `importjob/parser/` 包）**
+
+| 文件 | 角色 | 本层结束系统能干什么 |
+|---|---|---|
+| `Patterns.java` | 正则/判定符号集中管理 | 两处共用一套规则，不漂移 |
+| `Block.java` | 文档最小结构单元（序号/类型/原文） | 文档变成可寻址的序列 |
+| `BlockExtractor.java` | POI → List\<Block\> | 任意 docx 都能被结构化 |
+| `Segment.java` | 决策产物：索引区间 + 分类 + 依据 | 边界可被表达、可被校验 |
+| `Segmenter.java` | 决策抽象接口 | 规则/LLM 可互换 |
+| `RuleSegmenter.java` | 规则实现（强/弱/散记） | 不接 LLM 也能拆题 |
+| `QuestionAssembler.java` | 按 Segment 拼原文 | 草稿内容 100% 来自原文 |
+| `ParsedQuestion.java` | 装配结果（沿用 v2） | 可直接写草稿表 |
+
+> 结构动作：在 `importjob` 下确认已有 `parser` 子包（第 0 步建过五包）；没有就右键 `importjob` → New → Package → `parser`。
+
+**④ 代码（按依赖顺序：词汇 → 形状 → 抽取 → 决策 → 装配）**
+
+#### 3.1.1 先建共享词汇表：`Patterns`
+
+为什么第一步是它？因为"强规则识别"和"标题清洗"分属 Segmenter 与 Assembler 两层，**如果各写一份正则，改一处忘一处必然漂移**。集中成常量类，是零成本的防腐。
 
 ```java
 // importjob/parser/Patterns.java —— 正则集中管理（Segmenter 与 Assembler 共用）
@@ -264,6 +300,10 @@ public final class Patterns {
 }
 ```
 
+#### 3.1.2 确定数据形状：`Block`
+
+为什么不是直接传 `XWPFParagraph`？因为**决策层不该知道 POI**——将来 LLM 方案里，送进去的是"块摘要"，装配时用的是"块全文"，两者都只需要 `index/kind/text` 三个字段。把 POI 对象挡在抽取层内部，是让后面两层可测的前提。
+
 ```java
 // importjob/parser/Block.java —— 文档的最小结构单元
 package com.wengu.backend.importjob.parser;
@@ -285,6 +325,13 @@ public class Block {
     private String text;    // 段落原文 / 代码围栏 / markdown表格 / 图片markdown
 }
 ```
+
+#### 3.1.3 做确定性抽取：`BlockExtractor`
+
+它只回答一个问题：**按文档顺序，把内容变成块**。三个细节：
+- `IBodyElement` 保序遍历（你若分开遍历段落和表格，代码块会全跑到答案末尾——第 5 章验收会查）
+- 图片**独立成块**：这样将来 LLM 能判断"这张图属于上一题还是下一题"，而不是被硬塞进段落
+- 单格表格 → CODE 块（你手撕文档的存储约定）；多格表格 → MARKDOWN 表
 
 ```java
 // importjob/parser/BlockExtractor.java —— POI → Block 列表（确定性，无业务决策）
@@ -319,7 +366,7 @@ public class BlockExtractor {
                         blocks.add(new Block(blocks.size(),
                                 isHeading(p, text) ? Block.HEADING : Block.PARA, text));
                     }
-                    for (String url : extractImages(p)) {           // 图片独立成块（便于 LLM 判归属）
+                    for (String url : extractImages(p)) {           // 图片独立成块（便于后续判归属）
                         blocks.add(new Block(blocks.size(), Block.IMAGE,
                                 "![](" + url + ")\n\n"));
                     }
@@ -389,6 +436,12 @@ public class BlockExtractor {
 }
 ```
 
+> ✅ **本小步可独立验收**：此时写个临时 `main`（或单测）把一份真实 docx 喂给 `BlockExtractor`，打印块列表——分类标题、题目行、表格、图片应各就各位。**不要等全链路通了才发现抽块就错了。**
+
+#### 3.1.4 定义决策契约：`Segment` + `Segmenter`
+
+关键约定：**决策层只输出索引，不输出内容**。这是 LLM 方案能安全插入的根基——模型最多把边界定错，永远改不了你的笔记正文。同时把"区间必须升序、不重叠、不越界"写进接口文档，因为将来 LLM 输出的 JSON 必须过这道校验。
+
 ```java
 // importjob/parser/Segment.java —— 决策产物：只描述"索引区间 + 分类 + 依据"
 package com.wengu.backend.importjob.parser;
@@ -407,7 +460,7 @@ public class Segment {
 ```
 
 ```java
-// importjob/parser/Segmenter.java —— 决策层抽象（未来 LLM/Jev/本地分类器都实现它）
+// importjob/parser/Segmenter.java —— 决策层抽象（未来 LLM/本地分类器都实现它）
 package com.wengu.backend.importjob.parser;
 
 import java.util.List;
@@ -421,8 +474,17 @@ public interface Segmenter {
 }
 ```
 
+#### 3.1.5 落实现有规则：`RuleSegmenter`
+
+它把 v2 的三档规则搬进决策层，行为完全等价。算法四步（先讲清再贴码）：
+
+1. **遇 HEADING**：先给"当前题""当前散记"收尾，再切换分类
+2. **遇强规则**（①/数字/Q：开头）：收尾上一个，开新题（rule=STRONG）
+3. **遇弱规则**（分类内 + 当前题已有内容 + 短行无句读无逗号 + 非列表符号）：开新题（rule=WEAK）
+4. **其余**：有当前题就归它；没有就归散记区（SCATTER）——**散记区与当前题互斥**，所以不会重复收纳
+
 ```java
-// importjob/parser/RuleSegmenter.java —— 现有规则逻辑（强/弱/散记），行为与 v2 等价
+// importjob/parser/RuleSegmenter.java
 package com.wengu.backend.importjob.parser;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -492,6 +554,12 @@ public class RuleSegmenter implements Segmenter {
 }
 ```
 
+#### 3.1.6 做纯装配：`QuestionAssembler`
+
+**它不做任何判断**——只按 Segment 给的区间把块文本拼起来。两个必要的特殊处理：
+- 非散记题的**标题块不入答案**（标题已在 `title` 字段，重复会脏）
+- 散记的标题是合成的 `散记 · 分类名`，内容**包括首块**（首块就是被兜底的正文）
+
 ```java
 // importjob/parser/QuestionAssembler.java —— 装配层：按索引拼原文，逐字不改
 package com.wengu.backend.importjob.parser;
@@ -543,8 +611,12 @@ public class QuestionAssembler {
 }
 ```
 
+#### 3.1.7 沿用装配结果：`ParsedQuestion`
+
+与 v2 相同，只是 `rule` 的取值空间扩展为五档（后两档第 9 章启用）：
+
 ```java
-// importjob/parser/ParsedQuestion.java（保持 v2 结构；rule 取值扩展说明）
+// importjob/parser/ParsedQuestion.java
 package com.wengu.backend.importjob.parser;
 
 import lombok.Data;
@@ -564,9 +636,11 @@ public class ParsedQuestion {
 }
 ```
 
+> ✅ **本小步可独立验收**：`BlockExtractor → RuleSegmenter → QuestionAssembler` 三段串起来，打印 `ParsedQuestion` 列表，直接肉眼判断拆分质量（强/弱/散记分布、有没有把连续段落拆碎）。这一步不满意，就调弱规则参数——**别等 MQ、SSE、前端全做完再回来改**。
+
 > ★ 抽问五连：
 > 1. 为什么让 LLM 只输出 `Segment`（索引），而不是让它输出整理好的题目 JSON？（答：索引决策无法改写原文——从架构上消灭"模型润色笔记"的幻觉风险）
-> 2. 为什么散记区与当前题互斥？（答：有当前题时所有块默认归属它；散记只收"无人认领"的开头区，二者状态机天然互斥，避免重复收纳）
+> 2. 为什么散记区与当前题互斥？（答：有当前题时所有块默认归属它；散记只收"无人认领"的开头区，避免重复收纳）
 > 3. 弱规则为什么要求"当前题已有内容"？（答：否则一道题开头的连续短行会被全部拆碎）
 > 4. 弱标题为什么禁逗号/顿号、禁句读结尾？（答：最便宜的"句子 vs 标题"判别器，零成本过滤大多数误判）
 > 5. 单格表格为什么判为代码块？（答：你手撕文档的存储习惯，领域约定）
@@ -597,6 +671,22 @@ wengu.import.segmenter=rule
 | LLM_LOW（预留） | 模型低置信边界 | **标黄，重点复核** |
 
 ### 3.2 MQ 接线（raw client）
+
+**① 我们现在要干嘛**：上传接口必须"秒回 taskId"，真正的解析要挪到后台——因此需要一个**可靠投递**的通道，把"任务Id + 用户Id"交给消费者。
+
+**② 设计思路（三条决策）**：
+1. **不用 `rocketmq-spring-boot-starter`**：Boot 4 生态太新，starter 自动装配有版本风险（MyBatis-Plus 的亏吃过一次）。raw client 多写 30 行，换来可控与可讲
+2. **消息体带 `userId`**：消费者线程没有 HTTP 上下文，多租户插件每个 SQL 都要 `user_id` → 身份必须随消息走（`taskId:userId`）
+3. **发送必须同步等 ack**：发送失败就把任务置 5（终止），绝不能让前端拿到一个永远排队的 taskId
+
+**③ 缺什么（清单）**：
+
+| 文件 | 建在哪 | 角色 |
+|---|---|---|
+| RocketMQConfig.java | `config/`（第 1 章就有这个包） | 生产者 Bean（启动即连 namesrv） |
+| ImportTaskConsumer.java | `importjob/consumer/`（新建子包） | 消费者：订阅 topic，失败**不重投**（防卡死，见代码注释） |
+| application.properties | 追加两项 | namesrv 地址 + 导入目录 |
+
 
 ```java
 // config/RocketMQConfig.java
@@ -689,6 +779,22 @@ public class ImportTaskConsumer implements InitializingBean, DisposableBean {
 ```
 
 ### 3.3 ImportService（解析→草稿→确认，全码）
+
+**① 我们现在要干嘛**：把前面所有零件串成业务用例——上传、解析成草稿、列草稿、改草稿、确认转正、放弃。这是本章"业务编排层"的主干。
+
+**② 设计思路（先接口后实现）**：
+- **接口描述用例，不暴露实现细节**：`upload / parseToDrafts / markFailed / listDrafts / updateDraft / confirm / discard`——每个方法对应用户（或消费者）的一次意图
+- **事务边界**：`confirm` 里**逐题**调 `questionService.create()`（单题事务，一题失败不连坐）；任务状态更新独立于题目事务（否则一次失败全部回滚、任务状态还停在 3）
+- **上下文三处铁律**：`parseToDrafts` / `confirm` / `discard` 都是"可能脱离 HTTP 线程"的入口 → 用 try/finally 包 `UserContext.set/clear`
+
+**③ 缺什么（清单）**：
+
+| 文件 | 建在哪 | 角色 |
+|---|---|---|
+| ImportService.java | `importjob/service/` | 业务接口（7 个用例方法） |
+| ImportServiceImpl.java | 同包 | 全部实现（本章最长的一个类） |
+| CategoryService.getOrCreate | **改既有文件**（`question/service/`，接口加 1 行 + 实现加 10 行） | 导入时按分类名"不存在就建" |
+
 
 ```java
 // importjob/service/ImportService.java
@@ -1033,6 +1139,23 @@ public Long getOrCreate(String name) {
 
 ## 4️⃣ 接口编排层（结束时：Apifox 全流程可走）
 
+**① 我们现在要干嘛**：把业务层暴露成 HTTP 接口，并且给前端一条**实时进度**通道（SSE）。业务逻辑一条都不许写在 Controller 里——它只做"收参 → 调 Service → 包 Result"。
+
+**② 设计思路**：
+- 7 个端点：上传 / 任务查询 / 草稿列表 / 改草稿 / 确认 / 放弃 / SSE 进度
+- SSE 需要独立线程池（不能占用 Tomcat 的业务线程池），因此加一个 `sseExecutor` Bean
+- **SSE 线程同样没有 HTTP 上下文** → 用请求线程先取 `userId`，进线程后 `set`，finally `clear`（与消费者同一考点，第二次踩）
+- `EventSource` 不能自定义请求头 → 登录拦截器对 token 增加 "query 参数兜底"
+
+**③ 缺什么（清单）**：
+
+| 文件 | 建在哪 | 角色 |
+|---|---|---|
+| SseConfig.java | `config/` | SSE 专用线程池 |
+| ImportController.java | `importjob/controller/` | 7 个端点 + SSE 推送循环 |
+| LoginInterceptor.java | **改既有文件**（`security/`） | token 支持 `?token=`（只补两行） |
+
+
 ```java
 // config/SseConfig.java
 package com.wengu.backend.config;
@@ -1208,6 +1331,24 @@ wengu.import.segmenter=rule
 | DELETE | /import/task/{id} | 放弃导入 |
 
 ## 5️⃣ 前端联调层（结束时：拖文件 → 预览把关 → 题库见题）
+
+**① 我们现在要干嘛**：给用户一个"拖进去 → 看进度 → 在预览里把关 → 确认入库"的完整闭环。
+
+**② 设计思路（两个页面分工）**：
+- `ImportView` 只负责"上传 + 等解析"：上传后订阅 SSE，看到 status=2（草稿就绪）**立刻跳转**——不在上传页做编辑
+- `ImportPreviewView` 只负责"人工关卡"：改标题/分类、勾选、折叠看答案、确认/放弃。所有修改**即时落库**（防止刷新丢勾选），确认前再统一保存一遍兜底
+- 数据流与第 3 章保持一致：id 全字符串、请求走统一 `request.ts`（唯 FormData 除外）
+
+**③ 缺什么（清单）**：
+
+| 文件 | 建在哪 | 角色 |
+|---|---|---|
+| api/import.ts | `frontend/src/api/` | 6 个接口翻译（含 FormData 上传） |
+| ImportView.vue | `frontend/src/views/` | 上传 + SSE 进度 |
+| ImportPreviewView.vue | 同目录 | 预览确认页（本章第二大页面） |
+| router/index.ts | **改既有文件** | 加 `import` 与 `import/preview/:taskId` 两条子路由 |
+| HomeView.vue | **改既有文件** | 侧栏加"导入 docx"入口 |
+
 
 **结构动作**：新建 `api/import.ts`（追加）、`views/ImportView.vue`、**`views/ImportPreviewView.vue`**；`router/index.ts` 加两条子路由（`import`、`import/preview/:taskId`）；HomeView 侧栏加"导入 docx"入口。
 
