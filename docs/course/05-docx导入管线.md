@@ -1,6 +1,6 @@
 # 05 · docx 导入管线（Phase 4）
 
-> 状态：⬜ 待开发 ｜ **v2（2026-10-21 需求定稿：解析后人工预览确认 + 散记兜底）**
+> 状态：⬜ 待开发 ｜ **v3（2026-10-22 增补：解析三段式 Block→Segmenter→Assembler，为 LLM 拆题预留接口；LLM 实装与选型评测放第 9 章）** ｜ v2：人工预览确认 + 散记兜底
 > 本章是**并发战场的第一仗**，同时是**产品化的一课**：拆题不能盲拆——机器拆完，人来把关。
 > 完成后：上传 docx → 自动拆成"题目草稿" → 预览页逐条确认/修改 → 一键转正入题库。
 
@@ -18,7 +18,7 @@
 
 ```
 上传(秒回taskId) → 存盘+哈希去重 → 建任务(0排队) → 发MQ
-   → 消费者：CAS 0→1 → DocxParser 拆题(强规则/弱规则/散记) → 写草稿表 → status=2 待确认
+   → 消费者：CAS 0→1 → Block提取→Segmenter拆题(强/弱/散记) → 装配 → 写草稿表 → status=2 待确认
    → 预览页：逐条勾选/改标题分类/看答案 → 确认 → 逐条转正入库 → status=4 已完成
                                                         ↘ 放弃 → 草稿清空 status=5
 ```
@@ -38,7 +38,7 @@
 ③ MQ 消费（无线程HTTP上下文）
                     ─ UserContext.set(userId)  ★ 身份随消息传递
                     ─ CAS 0→1（防重投重复解析）
-                    ─ DocxParser 拆题 → 逐条 INSERT t_import_draft
+                    ─ BlockExtractor 抽块 → Segmenter 定边界 → Assembler 装配 → 逐条 INSERT t_import_draft
                     ─ 任务 → status=2 待确认（total=草稿数）
 ④ 前端 SSE 看到 2 → 跳 /import/preview/{taskId}
 ⑤ 预览页（人工关卡）
@@ -53,7 +53,7 @@
 |---|---|---|
 | 1️⃣ 规格 | t_import_task（六态）+ t_import_draft | 数据形状定死：任务与草稿分离 |
 | 2️⃣ 数据层 | ImportTaskMapper(CAS) + ImportDraftMapper | 状态机与草稿存取可独立运转 |
-| 3️⃣ 业务编排 | DocxParser(强/弱/散记) + ImportServiceImpl(解析/确认/放弃) + MQ | 命令行跑一次能产出草稿 |
+| 3️⃣ 业务编排 | BlockExtractor + Segmenter(RuleSegmenter) + QuestionAssembler + ImportServiceImpl + MQ | 命令行跑一次能产出草稿 |
 | 4️⃣ 接口编排 | 上传/进度SSE/草稿列表/改草稿/确认/放弃 | Apifox 全流程可走 |
 | 5️⃣ 前端 | 导入页 + **预览确认页** + 路由/入口 | 浏览器拖文件 → 预览把关 → 题库出现 |
 
@@ -102,7 +102,7 @@ CREATE TABLE t_import_draft (
   category_name VARCHAR(50)  DEFAULT NULL COMMENT '预览时可改；确认时不存在则新建',
   source        VARCHAR(50)  DEFAULT NULL,
   q_type        TINYINT      NOT NULL DEFAULT 0,
-  rule_matched  VARCHAR(10)  NOT NULL COMMENT 'STRONG/WEAK/SCATTER（强识别/弱识别/散记）',
+  rule_matched  VARCHAR(10)  NOT NULL COMMENT 'STRONG/WEAK/SCATTER，预留 LLM_HIGH/LLM_LOW',
   selected      TINYINT      NOT NULL DEFAULT 1 COMMENT '预览勾选态',
   created_time  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -223,30 +223,71 @@ public interface ImportDraftMapper extends BaseMapper<ImportDraft> {}
 
 ## 3️⃣ 业务编排层（结束时：一次解析能产出可确认的草稿集）
 
-### 3.1 解析产物与解析器（v2 全码）
+### 3.1 解析三段式：Block 提取 → Segmenter 决策 → Assembler 装配（v3，为 LLM 预留）
+
+**为什么先拆成三层？**（这是本章最重要的架构决策）
+
+```
+POI 原始文档
+   ↓ BlockExtractor（确定性：抽取段落/表格/代码/图片 → 带序号的块列表）
+List<Block>
+   ↓ Segmenter（决策层：只回答"哪几块组成一道题"——索引级判断）
+List<Segment>
+   ↓ QuestionAssembler（装配层：按索引把原文拼成草稿，逐字不改）
+List<ParsedQuestion> → t_import_draft
+```
+
+好处：
+1. **LLM 未来只碰 Segmenter 这一层**——它输出的是 `[{titleIndex:13,end:16},…]` 这种索引决策，天然无法改写你的八股原文（零幻觉面）
+2. 换策略（规则 → 本地模型 → Jev）不动抽取与装配，符合"策略模式"的教科书用法
+3. 规则版可单独验收；LLM 版上线时能做 A/B（`rule` vs `llm` 配置切换）
 
 ```java
-// importjob/parser/ParsedQuestion.java
+// importjob/parser/Patterns.java —— 正则集中管理（Segmenter 与 Assembler 共用）
 package com.wengu.backend.importjob.parser;
 
-import lombok.Data;
+import java.util.List;
+import java.util.regex.Pattern;
 
-@Data
-public class ParsedQuestion {
-    public static final String STRONG = "STRONG";
-    public static final String WEAK = "WEAK";
-    public static final String SCATTER = "SCATTER";
+public final class Patterns {
+    /** 强规则：① / 1. / Q： */
+    public static final Pattern Q_START =
+            Pattern.compile("^(?:[①-⑳]|[0-9]{1,2}\\s*[.、．)）]|Q\\s*[:：])");
+    public static final Pattern TITLE_PREFIX =
+            Pattern.compile("^(?:[①-⑳]|[0-9]{1,2}\\s*[.、．)）]|Q\\s*[:：])\\s*");
+    public static final Pattern SOURCE = Pattern.compile("【([^】]{1,50})】");
+    /** 弱标题禁止的结尾标点（句子特征） */
+    public static final String BAD_END = "：:。，,、；;！!？?”\"'）)";
+    public static final List<String> BULLETS = List.of("-", "·", "•", "*", "+", ">");
 
-    private String title;
-    private String category;
-    private String source;
-    private String rule;
-    private StringBuilder answer = new StringBuilder();
+    private Patterns() {}
 }
 ```
 
 ```java
-// importjob/parser/DocxParser.java
+// importjob/parser/Block.java —— 文档的最小结构单元
+package com.wengu.backend.importjob.parser;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+
+@Data
+@AllArgsConstructor
+public class Block {
+    public static final String HEADING = "HEADING";
+    public static final String PARA = "PARA";
+    public static final String CODE = "CODE";
+    public static final String TABLE = "TABLE";
+    public static final String IMAGE = "IMAGE";
+
+    private int index;      // 文档内序号（Segmenter 决策的依据）
+    private String kind;    // 上面五个常量之一
+    private String text;    // 段落原文 / 代码围栏 / markdown表格 / 图片markdown
+}
+```
+
+```java
+// importjob/parser/BlockExtractor.java —— POI → Block 列表（确定性，无业务决策）
 package com.wengu.backend.importjob.parser;
 
 import lombok.extern.slf4j.Slf4j;
@@ -260,84 +301,41 @@ import java.nio.file.*;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Slf4j
 @Component
-public class DocxParser {
-
-    /** 强规则：① / 1. / Q： */
-    private static final Pattern Q_START =
-            Pattern.compile("^(?:[①-⑳]|[0-9]{1,2}\\s*[.、．)）]|Q\\s*[:：])");
-    private static final Pattern TITLE_PREFIX =
-            Pattern.compile("^(?:[①-⑳]|[0-9]{1,2}\\s*[.、．)）]|Q\\s*[:：])\\s*");
-    private static final Pattern SOURCE = Pattern.compile("【([^】]{1,50})】");
-    /** 弱标题禁止的结尾标点（句子特征） */
-    private static final String BAD_END = "：:。，,、；;！!？?”\"'）)";
-    private static final List<String> BULLETS = List.of("-", "·", "•", "*", "+", ">");
+public class BlockExtractor {
 
     @Value("${wengu.media-dir}")
     private String mediaDir;
 
-    /** 解析结果：按文档顺序排列（散记也占位） */
-    public List<ParsedQuestion> parse(InputStream in) throws IOException {
-        List<ParsedQuestion> out = new ArrayList<>();
-        Ctx ctx = new Ctx();                    // 解析上下文（分类/当前题/散记buffer）
-
+    public List<Block> extract(InputStream in) throws IOException {
+        List<Block> blocks = new ArrayList<>();
         try (XWPFDocument doc = new XWPFDocument(in)) {
             for (IBodyElement el : doc.getBodyElements()) {
                 if (el instanceof XWPFParagraph p) {
-                    handleParagraph(p, ctx, out);
+                    String text = p.getText() == null ? "" : p.getText().trim();
+                    if (!text.isEmpty()) {
+                        blocks.add(new Block(blocks.size(),
+                                isHeading(p, text) ? Block.HEADING : Block.PARA, text));
+                    }
+                    for (String url : extractImages(p)) {           // 图片独立成块（便于 LLM 判归属）
+                        blocks.add(new Block(blocks.size(), Block.IMAGE,
+                                "![](" + url + ")\n\n"));
+                    }
                 } else if (el instanceof XWPFTable t) {
-                    handleTable(t, ctx);
+                    if (isSingleCell(t)) {
+                        blocks.add(new Block(blocks.size(), Block.CODE,
+                                "```java\n" + t.getRow(0).getCell(0).getText().trim() + "\n```\n"));
+                    } else {
+                        blocks.add(new Block(blocks.size(), Block.TABLE, toMarkdownTable(t)));
+                    }
                 }
             }
-            finish(ctx, out);
         }
-        return out;
+        return blocks;
     }
 
-    // ---------- 段落 ----------
-    private void handleParagraph(XWPFParagraph p, Ctx ctx, List<ParsedQuestion> out) {
-        String text = p.getText() == null ? "" : p.getText().trim();
-        List<String> images = extractImages(p);
-
-        if (!text.isEmpty() && isHeading(p, text)) {          // 新分类
-            flushQuestion(ctx, out);
-            flushScatter(ctx, out);
-            ctx.category = text.replaceAll("^#+\\s*", "").trim();
-            return;
-        }
-        if (!text.isEmpty() && Q_START.matcher(text).find()) { // 强规则新题
-            flushQuestion(ctx, out);
-            flushScatter(ctx, out);
-            ctx.current = newQuestion(text, ctx.category, ParsedQuestion.STRONG);
-            appendImages(ctx, images);
-            return;
-        }
-        if (!text.isEmpty() && isWeakTitle(text) && ctx.current != null
-                && ctx.current.getAnswer().length() > 0) {     // 弱规则新题
-            flushQuestion(ctx, out);
-            ctx.current = newQuestion(text, ctx.category, ParsedQuestion.WEAK);
-            appendImages(ctx, images);
-            return;
-        }
-        // 普通正文
-        if (!text.isEmpty()) {
-            if (ctx.current != null) ctx.current.getAnswer().append(text).append("\n\n");
-            else ctx.scatter.append(text).append("\n\n");       // 无归属 → 散记
-        }
-        appendImages(ctx, images);
-    }
-
-    private void handleTable(XWPFTable t, Ctx ctx) {
-        String md = isSingleCell(t) ? toCodeBlock(t) : toMarkdownTable(t);
-        if (ctx.current != null) ctx.current.getAnswer().append(md).append("\n");
-        else ctx.scatter.append(md).append("\n");
-    }
-
-    // ---------- 判定 ----------
     private boolean isHeading(XWPFParagraph p, String text) {
         String style = p.getStyle();
         if (style != null) {
@@ -347,69 +345,8 @@ public class DocxParser {
         return text.startsWith("#");
     }
 
-    /**
-     * ★ 弱规则（本版核心）：裸标题启发式
-     *  ≤40字、不含逗号顿号、不以句读结尾、不以列表符号开头 → 视为可能的新题
-     *  再叠加"当前题已有答案"作为前置条件（在调用处判断）
-     */
-    private boolean isWeakTitle(String text) {
-        if (text.length() == 0 || text.length() > 40) return false;
-        if (text.contains("，") || text.contains("、") || text.contains(",")) return false;
-        if (BAD_END.indexOf(text.charAt(text.length() - 1)) >= 0) return false;
-        for (String b : BULLETS) if (text.startsWith(b)) return false;
-        return true;
-    }
-
-    // ---------- 组装 ----------
-    private ParsedQuestion newQuestion(String text, String category, String rule) {
-        ParsedQuestion q = new ParsedQuestion();
-        q.setCategory(category);
-        q.setRule(rule);
-        Matcher m = SOURCE.matcher(text);
-        if (m.find()) q.setSource(m.group(1));
-        String title = TITLE_PREFIX.matcher(text).replaceFirst("").trim();
-        q.setTitle(truncate(title.isEmpty() ? text : title, 100));
-        return q;
-    }
-
-    private void appendImages(Ctx ctx, List<String> images) {
-        if (images.isEmpty()) return;
-        StringBuilder target = ctx.current != null ? ctx.current.getAnswer() : ctx.scatter;
-        for (String url : images) target.append("![](").append(url).append(")\n\n");
-    }
-
-    private void flushQuestion(Ctx ctx, List<ParsedQuestion> out) {
-        if (ctx.current != null) {
-            if (ctx.current.getAnswer().length() == 0) ctx.current.getAnswer().append("（空）\n");
-            out.add(ctx.current);
-            ctx.current = null;
-        }
-    }
-
-    /** ★ 散记兜底：任何无归属内容都不许丢 */
-    private void flushScatter(Ctx ctx, List<ParsedQuestion> out) {
-        if (ctx.scatter.length() == 0) return;
-        ParsedQuestion q = new ParsedQuestion();
-        q.setRule(ParsedQuestion.SCATTER);
-        q.setCategory(ctx.category);
-        q.setTitle(truncate("散记 · " + (ctx.category == null ? "未分类" : ctx.category), 100));
-        q.setAnswer(new StringBuilder(ctx.scatter.toString()));
-        out.add(q);
-        ctx.scatter.setLength(0);
-    }
-
-    private void finish(Ctx ctx, List<ParsedQuestion> out) {
-        flushQuestion(ctx, out);
-        flushScatter(ctx, out);
-    }
-
-    // ---------- 表格/图片工具 ----------
     private boolean isSingleCell(XWPFTable t) {
         return t.getRows().size() == 1 && t.getRow(0).getTableCells().size() == 1;
-    }
-
-    private String toCodeBlock(XWPFTable t) {
-        return "```java\n" + t.getRow(0).getCell(0).getText().trim() + "\n```\n";
     }
 
     private String toMarkdownTable(XWPFTable t) {
@@ -418,9 +355,7 @@ public class DocxParser {
         for (int i = 0; i < rows.size(); i++) {
             List<XWPFTableCell> cells = rows.get(i).getTableCells();
             sb.append("|");
-            for (XWPFTableCell c : cells) {
-                sb.append(" ").append(c.getText().replace("\n", " ").trim()).append(" |");
-            }
+            for (XWPFTableCell c : cells) sb.append(" ").append(c.getText().replace("\n", " ").trim()).append(" |");
             sb.append("\n");
             if (i == 0) {
                 sb.append("|");
@@ -451,25 +386,215 @@ public class DocxParser {
         }
         return urls;
     }
+}
+```
 
-    private String truncate(String s, int max) {
-        return s.length() <= max ? s : s.substring(0, max);
+```java
+// importjob/parser/Segment.java —— 决策产物：只描述"索引区间 + 分类 + 依据"
+package com.wengu.backend.importjob.parser;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+
+@Data
+@AllArgsConstructor
+public class Segment {
+    private int titleIndex;          // 标题所在块
+    private int endIndexInclusive;   // 该题最后一块的索引（含）
+    private String category;         // 所属分类（来自最近的 HEADING）
+    private String rule;             // STRONG / WEAK / SCATTER ；预留 LLM_HIGH / LLM_LOW
+}
+```
+
+```java
+// importjob/parser/Segmenter.java —— 决策层抽象（未来 LLM/Jev/本地分类器都实现它）
+package com.wengu.backend.importjob.parser;
+
+import java.util.List;
+
+public interface Segmenter {
+    /**
+     * 只做"边界决策"：输入块序列，输出分段（索引区间），绝不修改任何文本内容。
+     * 实现约定：Segment 必须按 titleIndex 升序、区间不重叠、索引在 [0, blocks.size()-1]。
+     */
+    List<Segment> segment(List<Block> blocks);
+}
+```
+
+```java
+// importjob/parser/RuleSegmenter.java —— 现有规则逻辑（强/弱/散记），行为与 v2 等价
+package com.wengu.backend.importjob.parser;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@Component
+@ConditionalOnProperty(name = "wengu.import.segmenter", havingValue = "rule", matchIfMissing = true)
+public class RuleSegmenter implements Segmenter {
+
+    @Override
+    public List<Segment> segment(List<Block> blocks) {
+        List<Segment> out = new ArrayList<>();
+        String category = null;
+        String currentRule = null;
+        int currentStart = -1;      // 当前题的标题块
+        int scatterStart = -1;      // 当前散记区起点（与 currentStart 互斥）
+
+        for (int i = 0; i < blocks.size(); i++) {
+            Block b = blocks.get(i);
+
+            if (Block.HEADING.equals(b.getKind())) {                  // 新分类：先收尾
+                flush(out, currentStart, i - 1, category, currentRule);
+                flush(out, scatterStart, i - 1, category, "SCATTER");
+                category = b.getText().replaceAll("^#+\\s*", "").trim();
+                currentStart = -1; scatterStart = -1; currentRule = null;
+                continue;
+            }
+
+            boolean strong = Block.PARA.equals(b.getKind())
+                    && Patterns.Q_START.matcher(b.getText()).find();
+            // 弱规则：分类内、当前题已有答案、行短且无句读/逗号、非列表符号开头
+            boolean weak = Block.PARA.equals(b.getKind()) && currentStart >= 0
+                    && i - 1 > currentStart                            // 当前题已有内容
+                    && isWeakTitle(b.getText());
+
+            if (strong || weak) {
+                flush(out, currentStart, i - 1, category, currentRule);
+                flush(out, scatterStart, i - 1, category, "SCATTER");
+                currentStart = i;
+                currentRule = strong ? "STRONG" : "WEAK";
+                scatterStart = -1;
+            } else if (currentStart < 0 && scatterStart < 0) {
+                scatterStart = i;                                      // 无归属内容 → 散记区
+            }
+            // 其余情况：内容自然落进当前题或当前散记区
+        }
+        flush(out, currentStart, blocks.size() - 1, category, currentRule);
+        flush(out, scatterStart, blocks.size() - 1, category, "SCATTER");
+        return out;
     }
 
-    /** 解析上下文 */
-    private static class Ctx {
-        String category;
-        ParsedQuestion current;
-        StringBuilder scatter = new StringBuilder();
+    private void flush(List<Segment> out, int start, int end, String category, String rule) {
+        if (start < 0 || end < start || rule == null) return;
+        out.add(new Segment(start, end, category, rule));
+    }
+
+    private boolean isWeakTitle(String text) {
+        if (text.isEmpty() || text.length() > 40) return false;
+        if (text.contains("，") || text.contains("、") || text.contains(",")) return false;
+        if (Patterns.BAD_END.indexOf(text.charAt(text.length() - 1)) >= 0) return false;
+        for (String b : Patterns.BULLETS) if (text.startsWith(b)) return false;
+        return true;
     }
 }
 ```
 
-> ★ 抽问四连：
-> 1. 为什么散记内容要"在遇到新题前 flush"，而不是最后统一收？（答：保文档顺序，seq 才有意义）
-> 2. 弱规则为什么要求"当前题已有答案"？（答：否则把一道题的连续短段落全部拆碎）
-> 3. 为什么弱标题禁逗号/顿号？（答：正文列举句高频含逗号，标题极少——这是最便宜的误判过滤器）
-> 4. 单格表格为什么判定为代码块？（答：你手撕文档的存储习惯）
+```java
+// importjob/parser/QuestionAssembler.java —— 装配层：按索引拼原文，逐字不改
+package com.wengu.backend.importjob.parser;
+
+import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+
+@Component
+public class QuestionAssembler {
+
+    public List<ParsedQuestion> assemble(List<Block> blocks, List<Segment> segments) {
+        List<ParsedQuestion> out = new ArrayList<>();
+        for (Segment s : segments) {
+            ParsedQuestion q = new ParsedQuestion();
+            q.setRule(s.getRule());
+            q.setCategory(s.getCategory());
+
+            if ("SCATTER".equals(s.getRule())) {
+                q.setTitle(truncate("散记 · "
+                        + (s.getCategory() == null ? "未分类" : s.getCategory()), 100));
+            } else {
+                String raw = blocks.get(s.getTitleIndex()).getText();
+                Matcher m = Patterns.SOURCE.matcher(raw);
+                if (m.find()) q.setSource(m.group(1));
+                String t = Patterns.TITLE_PREFIX.matcher(raw).replaceFirst("").trim();
+                q.setTitle(truncate(t.isEmpty() ? raw : t, 100));
+            }
+
+            StringBuilder ans = new StringBuilder();
+            for (int i = s.getTitleIndex(); i <= s.getEndIndexInclusive() && i < blocks.size(); i++) {
+                if (!"SCATTER".equals(s.getRule()) && i == s.getTitleIndex()) continue;  // 标题行不入答案
+                String text = blocks.get(i).getText();
+                ans.append(text);
+                if (!text.endsWith("\n")) ans.append("\n\n");
+            }
+            if (ans.length() == 0) ans.append("（空）\n");
+            q.setAnswer(ans);
+            out.add(q);
+        }
+        return out;
+    }
+
+    private String truncate(String s, int max) {
+        return s.length() <= max ? s : s.substring(0, max);
+    }
+}
+```
+
+```java
+// importjob/parser/ParsedQuestion.java（保持 v2 结构；rule 取值扩展说明）
+package com.wengu.backend.importjob.parser;
+
+import lombok.Data;
+
+@Data
+public class ParsedQuestion {
+    public static final String STRONG = "STRONG";
+    public static final String WEAK = "WEAK";
+    public static final String SCATTER = "SCATTER";
+    // 预留：LLM_HIGH（模型高置信边界）/ LLM_LOW（低置信，预览页重点标黄）
+
+    private String title;
+    private String category;
+    private String source;
+    private String rule;
+    private StringBuilder answer = new StringBuilder();
+}
+```
+
+> ★ 抽问五连：
+> 1. 为什么让 LLM 只输出 `Segment`（索引），而不是让它输出整理好的题目 JSON？（答：索引决策无法改写原文——从架构上消灭"模型润色笔记"的幻觉风险）
+> 2. 为什么散记区与当前题互斥？（答：有当前题时所有块默认归属它；散记只收"无人认领"的开头区，二者状态机天然互斥，避免重复收纳）
+> 3. 弱规则为什么要求"当前题已有内容"？（答：否则一道题开头的连续短行会被全部拆碎）
+> 4. 弱标题为什么禁逗号/顿号、禁句读结尾？（答：最便宜的"句子 vs 标题"判别器，零成本过滤大多数误判）
+> 5. 单格表格为什么判为代码块？（答：你手撕文档的存储习惯，领域约定）
+
+**Phase 9 的 LLM 落地方式（本章只留接口，不写实现）**：
+
+| 方案 | 说明 | 选型结论 |
+|---|---|---|
+| **Ollama + Qwen（7B/8B）本地** | 逐块问"这块是题目标题吗/属于哪类"，输出 JSON 后校验；中文原生、离线、免费 | **主力**（第 9 章实装 `LlmSegmenter`） |
+| 本地小分类器（BERT/embedding+LR） | 标注 100~300 个块训练，毫秒级；只做"廉价闸门" | 可选优化（第 9 章评测后决定） |
+| **Jev（TypeSafe System One）** | 不生成文本，只能答 Choice/Noul/Score；逐块 Noul 判断 + 校准置信度，可做"高置信自动/低置信标黄"；$0.042/M 输入、输出免费、70~500ms；但**中文弱于英文**、闭源托管、国内需代理 | **仅进选型评测对照**，不作为运行依赖 |
+
+配置预留（`application.properties`，本章只用到 `rule`）：
+
+```properties
+# 拆题策略：rule（默认）| llm（第9章）| hybrid（第9章，规则定强边界 + LLM 判模糊区）
+wengu.import.segmenter=rule
+```
+
+`rule_matched` 五档语义（前三个本章使用，后两个第 9 章启用）：
+
+| 值 | 含义 | 预览页处理 |
+|---|---|---|
+| STRONG | 强规则命中 | 正常展示 |
+| WEAK | 裸标题启发式 | 可折叠提示"请复核" |
+| SCATTER | 无归属兜底 | 提示"散记，需人工整理" |
+| LLM_HIGH（预留） | 模型高置信边界 | 正常展示 |
+| LLM_LOW（预留） | 模型低置信边界 | **标黄，重点复核** |
 
 ### 3.2 MQ 接线（raw client）
 
@@ -613,8 +738,12 @@ import com.wengu.backend.importjob.entity.ImportDraft;
 import com.wengu.backend.importjob.entity.ImportTask;
 import com.wengu.backend.importjob.mapper.ImportDraftMapper;
 import com.wengu.backend.importjob.mapper.ImportTaskMapper;
-import com.wengu.backend.importjob.parser.DocxParser;
+import com.wengu.backend.importjob.parser.Block;
+import com.wengu.backend.importjob.parser.BlockExtractor;
 import com.wengu.backend.importjob.parser.ParsedQuestion;
+import com.wengu.backend.importjob.parser.QuestionAssembler;
+import com.wengu.backend.importjob.parser.Segment;
+import com.wengu.backend.importjob.parser.Segmenter;
 import com.wengu.backend.question.dto.QuestionCreateDTO;
 import com.wengu.backend.question.service.CategoryService;
 import com.wengu.backend.question.service.QuestionService;
@@ -640,7 +769,9 @@ import java.util.*;
 @RequiredArgsConstructor
 public class ImportServiceImpl extends ServiceImpl<ImportTaskMapper, ImportTask> implements ImportService {
 
-    private final DocxParser docxParser;
+    private final BlockExtractor blockExtractor;
+    private final Segmenter segmenter;
+    private final QuestionAssembler questionAssembler;
     private final ImportDraftMapper draftMapper;
     private final QuestionService questionService;
     private final CategoryService categoryService;
@@ -705,7 +836,9 @@ public class ImportServiceImpl extends ServiceImpl<ImportTaskMapper, ImportTask>
             List<ParsedQuestion> parsed;
             try (FileInputStream in = new FileInputStream(
                     Paths.get(importDir, task.getStoredPath()).toFile())) {
-                parsed = docxParser.parse(in);
+                List<Block> blocks = blockExtractor.extract(in);        // ① 结构化
+                List<Segment> segments = segmenter.segment(blocks);     // ② 定边界（可换 LLM 实现）
+                parsed = questionAssembler.assemble(blocks, segments);  // ③ 装配原文
             }
 
             int seq = 0;
@@ -1058,6 +1191,8 @@ Long userId = token == null ? null : JwtUtil.parse(token);
 ```properties
 wengu.rocketmq.namesrv=localhost:9876
 wengu.import-dir=D:/JavaCode/wengu/data/import
+# 拆题策略：rule（本章默认）| llm / hybrid（第9章 LLM 实装后启用）
+wengu.import.segmenter=rule
 ```
 
 **路由表**：
@@ -1348,10 +1483,11 @@ async function discard() {
 > 4. q_type 不自动识别"手撕"（预览页可手改）
 > 5. 图片孤儿（放弃/失败任务已落盘的图不清理）→ 第 9 章部署前补清理任务
 > 6. 弱规则参数（40 字/标点集）为经验值，后续可按你的文档集调优（写进 T 用例观察项）
+> 7. **LLM 拆题未实装**（v3 只留接口）：第 9 章做 `LlmSegmenter`（本地 Ollama + Qwen 主力；Jev 仅作对照评测）——届时 `rule_matched` 启用 LLM_HIGH/LLM_LOW 两档，预览页对 LLM_LOW 标黄
 
 ## 📦 本章交付物
 
-后端：`importjob/{entity,mapper,parser,consumer,service,controller}` + `RocketMQConfig` + `SseConfig` + CategoryService.getOrCreate + LoginInterceptor token 兜底 + properties 两项；两张新表。
+后端：`importjob/{entity,mapper,parser,consumer,service,controller}`（parser 含 Block/BlockExtractor/Segment/Segmenter/RuleSegmenter/QuestionAssembler/Patterns/ParsedQuestion）+ `RocketMQConfig` + `SseConfig` + CategoryService.getOrCreate + LoginInterceptor token 兜底 + properties 三项；两张新表。
 前端：`api/import.ts` + `ImportView.vue` + `ImportPreviewView.vue` + 两条路由 + 侧栏入口。
 依赖：poi-ooxml / rocketmq-client（已装）。
 
@@ -1362,6 +1498,8 @@ async function discard() {
 - SSE vs 轮询 vs WebSocket；EventSource 不能带头 → token 走 query 的取舍
 - POI/XWPF：`IBodyElement` 保序、图片从 run 取、单格表格=代码的领域约定
 - SHA-256 内容指纹做幂等键；状态机六态与终态不可逆；CAS 防并发/防重投
+- **策略模式**：Block 抽取（确定性）/ Segmenter（可替换决策）/ Assembler（纯装配）——LLM 只替换中间一层，从架构上隔离"模型改写内容"的风险
+- **决策模型 vs 生成模型选型**（第 9 章展开）：Jev（TypeSafe System One）只能答 Choice/Noul/Score、输出 token 免费、$0.042/M 输入、70~500ms，但不生成文本、中文弱于英文、闭源需代理；本地 Ollama+Qwen 中文更强、离线免费 → **个人知识库场景选本地**
 - **产品视角**：为什么"机器拆 + 人确认"比"纯自动"更适合个人知识库（信任分层 rule_matched 的设计）
 
 ## 下章预告
