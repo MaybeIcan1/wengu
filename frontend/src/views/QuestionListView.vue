@@ -209,8 +209,14 @@ function remove(id: string) {
 .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-3); opacity: .5 }
 .right-col { display: flex; align-items: center; gap: var(--sp-4); flex-shrink: 0 }
 .date { font-size: var(--fs-11); color: var(--ink-3); font-variant-numeric: tabular-nums }
-.ops { opacity: 0; transition: opacity .15s; display: flex; gap: 2px }
-.row:hover .ops { opacity: 1 }
+/* 操作区常驻但低对比：不做"突然浮现"，悬停只做颜色加深 */
+.ops { display: flex; gap: 2px }
+.ops :deep(.el-button) {
+  color: var(--ink-3); font-size: var(--fs-12); font-weight: 400;
+  padding: 2px 4px; height: auto; transition: color .18s ease;
+}
+.ops :deep(.el-button:hover) { color: var(--brand-deep) }
+.ops :deep(.el-button.is-link:hover) { color: var(--brand-deep) }
 .pager { display: flex; justify-content: center; margin-top: var(--sp-5) }
 
 .empty-actions { display: flex; flex-direction: column; align-items: center; gap: 4px }

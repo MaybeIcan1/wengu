@@ -120,7 +120,7 @@ function logout() {
   box-shadow: 0 6px 14px rgba(59, 130, 196, .28);
 }
 .brand .name { font-size: var(--fs-17); font-weight: 700; color: var(--ink); letter-spacing: .5px }
-.brand .en { font-size: var(--fs-11); color: var(--ink-3); margin-left: 2px; letter-spacing: 1px }
+.brand .en { font-size: var(--fs-11); color: var(--ink-2); margin-left: 2px; letter-spacing: 1.5px; opacity: .85 }
 
 .cat-head { display: flex; align-items: center; justify-content: space-between; padding: 0 8px var(--sp-2) }
 .cat-head .label { font-size: var(--fs-11); color: var(--ink-3); letter-spacing: 2px }
@@ -160,7 +160,7 @@ function logout() {
   height: 60px; padding: 0 var(--sp-6);
   border-bottom: 1px solid var(--line); background: var(--paper);
 }
-.hello { flex: 1; color: var(--ink-3); font-size: var(--fs-13) }
+.hello { flex: 1; color: var(--ink-2); font-size: var(--fs-13); font-weight: 500; letter-spacing: .2px }
 .avatar {
   width: 30px; height: 30px; border-radius: 50%; background: var(--brand-soft);
   color: var(--brand-deep); display: grid; place-items: center;
