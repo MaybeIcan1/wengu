@@ -98,7 +98,7 @@ async function discard() {
 <template>
   <div class="head">
     <div>
-      <h3 style="margin:0">导入预览确认</h3>
+      <h3 style="margin:0;font-weight:700">导入预览确认</h3>
       <p class="soft">
         共 {{ drafts.length }} 条，已勾选 {{ selectedCount }} 条。改动自动保存。
         强识别=规则明确；弱识别=裸标题推断，重点复核；散记=无法归属的原文兜底。

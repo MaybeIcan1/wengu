@@ -59,7 +59,7 @@ function logout() {
     <el-aside width="236px" class="side">
       <div class="brand" @click="pickCategory()">
         <span class="mark">温</span>
-        <span class="name serif">温故</span>
+        <span class="name">温故</span>
         <span class="en">wengu</span>
       </div>
 
@@ -119,11 +119,11 @@ function logout() {
   color: #fff; font-size: 13px; display: grid; place-items: center; font-weight: 700;
   box-shadow: 0 6px 14px rgba(59, 130, 196, .28);
 }
-.brand .name { font-size: var(--fs-17); font-weight: 700; color: var(--ink); letter-spacing: .5px }
+.brand .name { font-size: var(--fs-17); font-weight: 800; color: var(--ink); letter-spacing: .5px; font-family: var(--sans) }
 .brand .en { font-size: var(--fs-11); color: var(--ink-2); margin-left: 2px; letter-spacing: 1.5px; opacity: .85 }
 
 .cat-head { display: flex; align-items: center; justify-content: space-between; padding: 0 8px var(--sp-2) }
-.cat-head .label { font-size: var(--fs-11); color: var(--ink-3); letter-spacing: 2px }
+.cat-head .label { font-size: var(--fs-11); color: var(--ink-2); letter-spacing: 2px; font-weight: 600 }
 .cat-add {
   width: 22px; height: 22px; border: none; background: transparent; cursor: pointer;
   color: var(--ink-3); border-radius: 6px; display: grid; place-items: center; padding: 0;
@@ -160,7 +160,7 @@ function logout() {
   height: 60px; padding: 0 var(--sp-6);
   border-bottom: 1px solid var(--line); background: var(--paper);
 }
-.hello { flex: 1; color: var(--ink-2); font-size: var(--fs-13); font-weight: 500; letter-spacing: .2px }
+.hello { flex: 1; color: var(--ink-2); font-size: var(--fs-13); font-weight: 600; letter-spacing: .2px }
 .avatar {
   width: 30px; height: 30px; border-radius: 50%; background: var(--brand-soft);
   color: var(--brand-deep); display: grid; place-items: center;

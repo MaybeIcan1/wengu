@@ -64,7 +64,7 @@ onBeforeUnmount(() => { es?.close() })
 
 <template>
   <el-card class="wrap" shadow="never">
-    <h3 style="margin-top:0">导入 docx 题库</h3>
+    <h3 style="margin-top:0;font-weight:700">导入 docx 题库</h3>
     <p class="soft">
       支持 .docx（20MB 内）。解析完成后会先进入<b>预览确认</b>：改标题/分类、取消勾选不需要的条目，
       确认后才写入题库。识别不了的内容会收进「散记」条目，不会丢。

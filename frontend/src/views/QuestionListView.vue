@@ -108,7 +108,7 @@ function remove(id: string) {
 <template>
   <div class="page-head">
     <div>
-      <h1 class="serif">题目列表</h1>
+      <h1>题目列表</h1>
       <p class="sub">{{ total }} 道题<span v-if="hasFilter"> · 已筛选</span></p>
     </div>
     <el-button class="primary-btn" @click="showCreate = true">＋ 新建题目</el-button>
@@ -175,7 +175,7 @@ function remove(id: string) {
 
 <style scoped>
 .page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: var(--sp-4) }
-.page-head h1 { margin: 0; font-size: var(--fs-24); font-weight: 600; color: var(--ink); letter-spacing: .5px }
+.page-head h1 { margin: 0; font-size: var(--fs-24); font-weight: 700; color: var(--ink); letter-spacing: .3px }
 .page-head .sub { margin: 6px 0 0; font-size: var(--fs-12); color: var(--ink-3) }
 .primary-btn {
   background: var(--brand-grad); border: none; color: #fff; font-weight: 600;
@@ -209,14 +209,12 @@ function remove(id: string) {
 .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-3); opacity: .5 }
 .right-col { display: flex; align-items: center; gap: var(--sp-4); flex-shrink: 0 }
 .date { font-size: var(--fs-11); color: var(--ink-3); font-variant-numeric: tabular-nums }
-/* 操作区常驻但低对比：不做"突然浮现"，悬停只做颜色加深 */
+/* 操作区：保持 Element 原生蓝/红，不做悬停变色与字重变化（避免浮夸） */
 .ops { display: flex; gap: 2px }
 .ops :deep(.el-button) {
-  color: var(--ink-3); font-size: var(--fs-12); font-weight: 400;
-  padding: 2px 4px; height: auto; transition: color .18s ease;
+  font-size: var(--fs-12); font-weight: 400;
+  padding: 2px 4px; height: auto;
 }
-.ops :deep(.el-button:hover) { color: var(--brand-deep) }
-.ops :deep(.el-button.is-link:hover) { color: var(--brand-deep) }
 .pager { display: flex; justify-content: center; margin-top: var(--sp-5) }
 
 .empty-actions { display: flex; flex-direction: column; align-items: center; gap: 4px }
@@ -228,7 +226,6 @@ function remove(id: string) {
   .sel, .sel-sm { width: calc(50% - 4px) }
   .row { padding: 14px 14px; align-items: flex-start }
   .right-col { flex-direction: column; align-items: flex-end; gap: 4px }
-  .ops { opacity: 1 }
   .t { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical }
 }
 </style>

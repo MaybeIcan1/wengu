@@ -107,3 +107,6 @@ a { color: var(--brand-deep); text-decoration: none }
 /* 工具类 */
 .serif { font-family: var(--serif) }
 .muted { color: var(--ink-3) }
+
+/* 标题统一加粗（黑体），避免标题文案与背景融在一起 */
+h1, h2, h3, h4 { font-weight: 700 }

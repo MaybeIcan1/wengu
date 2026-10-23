@@ -84,7 +84,7 @@ async function submit() {
 <template>
   <div class="page-head">
     <div>
-      <h1 class="serif">{{ editId ? '编辑题目' : '新建题目' }}</h1>
+      <h1>{{ editId ? '编辑题目' : '新建题目' }}</h1>
       <p class="sub">{{ editId ? '修改后保存，历史版本可在数据库中回溯' : '先默写答案，再对照补充' }}</p>
     </div>
     <div class="head-ops">
@@ -135,7 +135,7 @@ async function submit() {
 
 <style scoped>
 .page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: var(--sp-4) }
-.page-head h1 { margin: 0; font-size: var(--fs-24); font-weight: 600; letter-spacing: .5px }
+.page-head h1 { margin: 0; font-size: var(--fs-24); font-weight: 700; letter-spacing: .3px }
 .page-head .sub { margin: 6px 0 0; font-size: var(--fs-12); color: var(--ink-3) }
 .head-ops { display: flex; gap: var(--sp-2); flex-shrink: 0 }
 .primary-btn { background: var(--brand-grad); border: none; color: #fff; font-weight: 600; box-shadow: 0 8px 18px rgba(59, 130, 196, .26) }

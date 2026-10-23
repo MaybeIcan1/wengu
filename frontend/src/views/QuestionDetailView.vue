@@ -78,7 +78,7 @@ function removeIt() {
 .kicker { font-size: var(--fs-11); letter-spacing: 3px; color: var(--brand-deep) }
 .sp { flex: 1 }
 .title {
-  margin: 12px 0 10px; font-size: var(--fs-26); font-weight: 600;
+  margin: 12px 0 10px; font-size: var(--fs-26); font-weight: 700;
   line-height: 1.45; color: var(--ink); letter-spacing: .3px;
 }
 .meta {
