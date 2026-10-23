@@ -70,9 +70,9 @@ function removeIt() {
 <style scoped>
 .reader-wrap { display: flex; justify-content: center }
 .reader {
-  width: 100%; max-width: 900px; background: var(--paper);
+  width: 100%; max-width: 900px; background: var(--card);
   border: 1px solid var(--line); border-radius: var(--r-lg);
-  padding: var(--sp-8) 44px var(--sp-6); box-shadow: var(--shadow-sm);
+  padding: var(--sp-8) 44px var(--sp-6); box-shadow: var(--shadow-md);
 }
 .topline { display: flex; align-items: center; gap: 8px }
 .kicker { font-size: var(--fs-11); letter-spacing: 3px; color: var(--brand-deep) }
@@ -98,6 +98,7 @@ function removeIt() {
 .body :deep(.md-editor-preview h1),
 .body :deep(.md-editor-preview h2),
 .body :deep(.md-editor-preview h3) { color: var(--ink); font-weight: 650; margin: 22px 0 10px }
+.body :deep(.md-editor-preview h1) { font-size: 19px; border-bottom: none }
 .body :deep(.md-editor-preview h2) { font-size: 18px }
 .body :deep(.md-editor-preview h3) { font-size: 15.5px }
 .body :deep(.md-editor-preview blockquote) {

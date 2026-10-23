@@ -4,24 +4,24 @@
    换主题只改本文件的 tokens
    ============================================================ */
 :root {
-  /* 色板（浅蓝） */
-  --bg: #f3f7fb;            /* 页面底 */
-  --paper: #fbfdff;         /* 阅读/侧栏纸面 */
-  --card: #ffffff;
-  --ink: #1f2a37;           /* 主文字 */
-  --ink-2: #5b6b7c;         /* 次级 */
-  --ink-3: #93a3b5;         /* 弱化 */
-  --line: #e3ebf3;          /* 细线 */
-  --line-soft: #eef4f9;
+  /* 色板（浅蓝，三级表面：底 → 纸面 → 纯白） */
+  --bg: #e3edf7;            /* 页面底：明确的浅蓝灰，和白色卡片拉开层次 */
+  --paper: #f7fbff;         /* 纸面：侧栏 / 顶栏（带一点蓝，不等于纯白） */
+  --card: #ffffff;          /* 卡片 / 输入框 / 弹层：纯白 */
+  --ink: #1c2833;           /* 主文字 */
+  --ink-2: #56677a;         /* 次级 */
+  --ink-3: #8fa1b3;         /* 弱化 */
+  --line: #d5e2ef;          /* 分隔线（比之前更清晰） */
+  --line-soft: #e8f0f7;
   --brand: #3b82c4;         /* 主蓝 */
   --brand-deep: #2f6ea8;
-  --brand-soft: #e8f2fb;
+  --brand-soft: #e3effa;
   --brand-grad: linear-gradient(135deg, #5aa2dd, #3b7fc0);
 
   /* 派生底色 */
-  --hover: #f5faff;
-  --code-bg: #f1f6fb;
-  --quote-bg: #f4f9fe;
+  --hover: #f2f8fe;
+  --code-bg: #eef5fc;
+  --quote-bg: #f4fafe;
 
   /* 字号阶梯 */
   --fs-11: 11px; --fs-12: 12px; --fs-13: 13px; --fs-14: 14px;
@@ -33,10 +33,10 @@
   /* 圆角 */
   --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-pill: 999px;
 
-  /* 阴影（冷调） */
-  --shadow-sm: 0 1px 2px rgba(31, 58, 88, .05);
-  --shadow-md: 0 8px 24px rgba(31, 58, 88, .09);
-  --shadow-lg: 0 18px 48px rgba(31, 58, 88, .16);
+  /* 阴影（冷调，带一点蓝） */
+  --shadow-sm: 0 1px 2px rgba(31, 58, 88, .06);
+  --shadow-md: 0 8px 24px rgba(31, 58, 88, .10);
+  --shadow-lg: 0 18px 48px rgba(31, 58, 88, .18);
   --shadow-brand: 0 8px 18px rgba(59, 130, 196, .28);
   --shadow-brand-hover: 0 14px 28px rgba(59, 130, 196, .36);
 
@@ -45,7 +45,7 @@
   --serif: Georgia, "Times New Roman", "Noto Serif SC", SimSun, serif;
   --mono: "JetBrains Mono", Consolas, "Courier New", monospace;
 
-  /* Element Plus 主题对齐 */
+  /* Element Plus：表面/填充/边框与三级层级对齐 */
   --el-color-primary: #3b82c4;
   --el-color-primary-light-3: #79aede;
   --el-color-primary-light-5: #a3c8e8;
@@ -53,14 +53,19 @@
   --el-color-primary-light-8: #d9e9f7;
   --el-color-primary-light-9: #e8f2fb;
   --el-color-primary-dark-2: #2f6ea8;
-  --el-text-color-primary: #1f2a37;
-  --el-text-color-regular: #5b6b7c;
-  --el-text-color-secondary: #93a3b5;
-  --el-border-color: #e3ebf3;
-  --el-border-color-light: #eaf1f8;
-  --el-border-color-lighter: #eef4f9;
-  --el-fill-color-blank: #fbfdff;
-  --el-bg-color: #fbfdff;
+  --el-text-color-primary: #1c2833;
+  --el-text-color-regular: #56677a;
+  --el-text-color-secondary: #8fa1b3;
+  --el-text-color-placeholder: #a9b9c8;
+  --el-border-color: #d9e5f1;
+  --el-border-color-light: #e4eef7;
+  --el-border-color-lighter: #ecf4fa;
+  --el-fill-color-blank: #ffffff;     /* 输入框/白底组件 */
+  --el-fill-color-light: #eef5fc;     /* 悬停/表头/选中行 */
+  --el-fill-color-lighter: #f4f9fd;
+  --el-bg-color: #ffffff;             /* 下拉/弹层：纯白，浮在纸面上 */
+  --el-bg-color-overlay: #ffffff;
+  --el-mask-color: rgba(28, 40, 51, .38);
   --el-font-size-base: 13.5px;
   --el-border-radius-base: 8px;
   --el-border-radius-small: 6px;

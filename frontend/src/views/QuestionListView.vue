@@ -189,8 +189,8 @@ function remove(id: string) {
 .sel-sm { width: 120px }
 
 .rows {
-  background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg);
-  overflow: hidden; box-shadow: var(--shadow-sm);
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
+  overflow: hidden; box-shadow: var(--shadow-md);
 }
 .row {
   display: flex; align-items: center; gap: var(--sp-4);

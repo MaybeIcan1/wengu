@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>配色方案预览</title>
+<style>
+  :root{--bg:#e9f1f8;--paper:#fafcff;--ink:#1c2833;--ink2:#56677a;--ink3:#8fa1b3;--line:#d9e5f1;--brand:#3b82c4;--brand-deep:#2f6ea8;--brand-soft:#e3effa;--grad:linear-gradient(135deg,#5aa2dd,#3b7fc0);--hover:#eef5fc;--code-bg:#edf4fb;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;font-size:13.5px}
+  .serif{font-family:Georgia,"Times New Roman",SimSun,serif}
+  .app{display:flex;height:900px}
+  .side{width:236px;background:var(--paper);border-right:1px solid var(--line);
+    padding:22px 14px;display:flex;flex-direction:column;gap:4px}
+  .brand{display:flex;align-items:center;gap:8px;padding:2px 10px 18px}
+  .brand .mark{width:26px;height:26px;border-radius:9px;background:var(--grad);
+    color:#fff;display:grid;place-items:center;font-size:13px;font-weight:700}
+  .brand b{font-size:17px;letter-spacing:.5px}
+  .brand span{color:var(--ink3);font-size:11px}
+  .sec{font-size:11px;color:var(--ink3);letter-spacing:2px;padding:14px 10px 6px}
+  .cat{display:flex;justify-content:space-between;align-items:center;padding:9px 10px;
+    border-radius:8px;color:var(--ink2);cursor:pointer}
+  .cat:hover{background:var(--hover)}
+  .cat.on{background:var(--brand-soft);color:var(--brand-deep);font-weight:600}
+  .cat .n{font-size:11px;color:var(--ink3)}
+  .grow{flex:1}
+  .new{display:flex;align-items:center;justify-content:center;gap:6px;
+    border:none;color:#fff;background:var(--grad);
+    padding:11px;border-radius:12px;font-size:14px;font-weight:700;cursor:pointer}
+  .main{flex:1;display:flex;min-width:0}
+  .list{width:520px;border-right:1px solid var(--line);display:flex;flex-direction:column;background:var(--paper)}
+  .head{padding:22px 24px 14px;border-bottom:1px solid var(--line)}
+  .crumb{font-size:11px;color:var(--ink3);letter-spacing:1px}
+  .title{display:flex;align-items:baseline;gap:10px;margin-top:8px}
+  .title h1{margin:0;font-size:26px;font-weight:600;letter-spacing:.5px}
+  .title .count{font-size:12px;color:var(--ink3)}
+  .tools{display:flex;gap:8px;margin-top:14px}
+  .search{flex:1;display:flex;align-items:center;gap:8px;border:1px solid var(--line);
+    border-radius:8px;padding:8px 10px;color:var(--ink3);background:#fff}
+  .chip{border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:12px;color:var(--ink2);background:#fff}
+  .row{padding:16px 24px;border-bottom:1px solid var(--line);cursor:pointer}
+  .row:hover{background:var(--hover)}
+  .row.on{background:var(--brand-soft);box-shadow:inset 3px 0 0 var(--brand)}
+  .row h3{margin:0 0 6px;font-size:15px;font-weight:600;line-height:1.5}
+  .meta{display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--ink3)}
+  .tag{color:var(--brand-deep);opacity:.85}
+  .dot{width:3px;height:3px;border-radius:50%;background:var(--ink3);opacity:.6}
+  .reader{flex:1;background:var(--paper);padding:30px 40px;overflow:hidden}
+  .reader .kicker{font-size:11px;letter-spacing:2px;color:var(--brand-deep)}
+  .reader h2{margin:10px 0 8px;font-size:25px;font-weight:600;line-height:1.45}
+  .reader .sub{display:flex;gap:12px;color:var(--ink3);font-size:11.5px;
+    padding-bottom:16px;border-bottom:1px solid var(--line)}
+  .reader p{line-height:2;color:var(--ink);font-size:14px;margin:16px 0}
+  .reader h4{margin:22px 0 8px;font-size:14px;letter-spacing:.5px}
+  .code{background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:14px 16px;
+    font-family:Consolas,monospace;font-size:12px;line-height:1.85;color:var(--ink);white-space:pre}
+  .note{border-left:2px solid var(--brand);padding:2px 0 2px 14px;color:var(--ink2);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><span class="mark">温</span><b class="serif">温故</b><span>wengu</span></div>
+    <div class="sec">我的分类</div>
+    <div class="cat"><span>全部题目</span><span class="n">38</span></div>
+    <div class="cat on"><span>计算机网络</span><span class="n">12</span></div>
+    <div class="cat"><span>Java 语言</span><span class="n">9</span></div>
+    <div class="cat"><span>数据库</span><span class="n">7</span></div>
+    <div class="cat"><span>操作系统</span><span class="n">6</span></div>
+    <div class="cat"><span>JVM</span><span class="n">4</span></div>
+    <div class="grow"></div>
+    <button class="new">＋ 新建题目</button>
+  </aside>
+
+  <div class="main">
+    <section class="list">
+      <div class="head">
+        <div class="crumb">题库 / 计算机网络</div>
+        <div class="title"><h1 class="serif">计算机网络</h1><span class="count">12 道 · 最近更新 3 天前</span></div>
+        <div class="tools">
+          <div class="search">⌕ 搜索标题…</div>
+          <div class="chip">难度 ▾</div>
+          <div class="chip">标签 ▾</div>
+        </div>
+      </div>
+      <div class="row on">
+        <h3>TCP 为什么握手要三次，挥手却要四次？</h3>
+        <div class="meta"><span class="tag">#TCP</span><span class="tag">#高频</span><span class="dot"></span><span>牛客</span><span class="dot"></span><span>中</span></div>
+      </div>
+      <div class="row">
+        <h3>浏览器从输入域名到页面出现，中间发生了什么？</h3>
+        <div class="meta"><span class="tag">#DNS</span><span class="tag">#渲染</span><span class="dot"></span><span>面经</span><span class="dot"></span><span>难</span></div>
+      </div>
+      <div class="row">
+        <h3>HTTP 的无状态怎么理解？状态管理有哪些方案？</h3>
+        <div class="meta"><span class="tag">#HTTP</span><span class="tag">#Cookie</span><span class="dot"></span><span>美的机考</span><span class="dot"></span><span>易</span></div>
+      </div>
+      <div class="row">
+        <h3>GET 与 POST 的本质区别是什么？</h3>
+        <div class="meta"><span class="tag">#HTTP</span><span class="dot"></span><span>实习复盘</span><span class="dot"></span><span>中</span></div>
+      </div>
+      <div class="row">
+        <h3>HTTPS 的握手过程，为什么用非对称 + 对称两段式？</h3>
+        <div class="meta"><span class="tag">#TLS</span><span class="tag">#高频</span><span class="dot"></span><span>牛客</span><span class="dot"></span><span>难</span></div>
+      </div>
+    </section>
+
+    <section class="reader">
+      <div class="kicker">问 答 卡 片</div>
+      <h2 class="serif">TCP 为什么握手要三次，挥手却要四次？</h2>
+      <div class="sub"><span>计算机网络</span><span>#TCP</span><span>#高频</span><span>来源：牛客</span><span>最后更新 10-20</span></div>
+      <p>三次握手是为了让双方都确认「自己的发送能力和对方的接收能力」都正常；四次挥手则是因为 TCP 是全双工，双方需要各自关闭发送通道。</p>
+      <h4>握手的关键点</h4>
+      <p>第三次握手不是多余的：它让服务端确认客户端确实收到了自己的 SYN-ACK，避免历史失效连接请求造成资源浪费。</p>
+      <div class="code">Client                        Server
+  | -------- SYN (seq=x) -------> |
+  | <--- SYN+ACK (seq=y, ack=x+1) |
+  | -------- ACK (ack=y+1) -----> |</div>
+      <div class="note">记忆锚点：握手确认「双向可达」，挥手确认「双向关闭」——所以一个 3 步，一个 4 步。</div>
+    </section>
+  </div>
+</div>
+</body>
+</html>
