@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>配色对比：暖橙 / 浅蓝 / 浅绿 / 蓝橙双色</title>
+<style>
+  body{margin:0;background:#eceae6;font-family:"Microsoft YaHei",system-ui,sans-serif;padding:18px}
+  h1{font-size:15px;margin:0 0 14px;color:#333;font-weight:600;letter-spacing:.5px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .cell{background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 4px 14px rgba(0,0,0,.06)}
+  .cap{display:flex;align-items:center;gap:8px;padding:9px 12px;font-size:12.5px;color:#333;border-bottom:1px solid #eee}
+  .sw{width:12px;height:12px;border-radius:4px;display:inline-block}
+  .cap b{font-weight:600}
+  .cap span{color:#999;font-size:11.5px}
+  img{display:block;width:100%}
+</style>
+</head>
+<body>
+  <h1>同一版式，四种配色（W 暖橙 / D 浅蓝 / E 浅绿 / F 蓝主色+橙点缀）</h1>
+  <div class="grid">
+    <div class="cell">
+      <div class="cap"><i class="sw" style="background:linear-gradient(135deg,#f0916a,#e2693f)"></i><b>W · 暖橙（当前）</b><span>亲切、鼓励感；久看偏燥</span></div>
+      <img src="W-warm.png" />
+    </div>
+    <div class="cell">
+      <div class="cap"><i class="sw" style="background:linear-gradient(135deg,#5aa2dd,#3b7fc0)"></i><b>D · 浅蓝</b><span>专注、理性、工具感</span></div>
+      <img src="D-blue.png" />
+    </div>
+    <div class="cell">
+      <div class="cap"><i class="sw" style="background:linear-gradient(135deg,#5db287,#3f9468)"></i><b>E · 浅绿</b><span>护眼、成长感、平静</span></div>
+      <img src="E-green.png" />
+    </div>
+    <div class="cell">
+      <div class="cap"><i class="sw" style="background:linear-gradient(135deg,#5aa2dd,#3b7fc0)"></i><i class="sw" style="background:linear-gradient(135deg,#f0916a,#e2693f);margin-left:-4px"></i><b>F · 蓝主色 + 橙点缀</b><span>冷静底 + 温暖动作色</span></div>
+      <img src="F-blue-orange.png" />
+    </div>
+  </div>
+</body>
+</html>
