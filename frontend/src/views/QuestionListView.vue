@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StateBox from '../components/StateBox.vue'
+import CreateChoiceDialog from '../components/CreateChoiceDialog.vue'
 import { pageQuestion, deleteQuestion } from '../api/question'
 import { listTag } from '../api/tag'
 import { useDebounceFn } from '@vueuse/core'
@@ -12,6 +13,7 @@ const route = useRoute()
 const router = useRouter()
 
 const loading = ref(false)
+const showCreate = ref(false)
 const rows = ref<any[]>([])
 const total = ref(0)
 const tags = ref<any[]>([])
@@ -103,7 +105,7 @@ function remove(id: string) {
       <el-option v-for="(n, i) in typeName" :key="i" :label="n" :value="i" />
     </el-select>
     <div class="flex-sp" />
-    <el-button type="warning" class="new-btn" @click="router.push('/question/new')">+ 新建题目</el-button>
+    <el-button type="warning" class="new-btn" @click="showCreate = true">+ 新建题目</el-button>
   </div>
 
   <StateBox :loading="loading" :empty="!rows.length"
@@ -132,6 +134,8 @@ function remove(id: string) {
     <el-pagination background layout="prev, pager, next, total" :total="total"
       :current-page="page" :page-size="10" @current-change="pageNumTo" />
   </div>
+
+  <CreateChoiceDialog v-model="showCreate" />
 </template>
 
 <style scoped>
