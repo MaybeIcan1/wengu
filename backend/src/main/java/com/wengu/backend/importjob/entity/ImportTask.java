@@ -18,6 +18,7 @@ public class ImportTask {
     private Integer successCount;
     private Integer failCount;
     private String errorMsg;
+    private String headingMode;    // CATEGORY / QUESTION（见 Segmenter.HeadingMode）
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdTime;
     @TableField(fill = FieldFill.INSERT_UPDATE)

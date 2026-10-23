@@ -15,9 +15,9 @@ public class LoginInterceptor implements HandlerInterceptor {
     public boolean preHandle(HttpServletRequest req, HttpServletResponse resp, Object handler)
             throws Exception {
         String auth = req.getHeader("Authorization");
-        if (auth == null || !auth.startsWith("Bearer ")) return deny(resp);
-        Long userId = JwtUtil.parse(auth.substring(7));
-        if (userId == null) return deny(resp);
+        String token = (auth != null && auth.startsWith("Bearer ")) ? auth.substring(7) : null;
+        if (token == null) token = req.getParameter("token");   // EventSource 只能走 query
+        Long userId = token == null ? null : JwtUtil.parse(token);
         UserContext.set(userId);          // ★ 本请求线程后面的代码都"知道"你是谁
         return true;
     }

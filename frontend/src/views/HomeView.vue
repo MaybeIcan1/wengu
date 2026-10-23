@@ -68,6 +68,7 @@ function logout() {
         <span>{{ c.name }}</span><span class="cnt">{{ c.questionCount }}</span>
       </div>
       <el-button class="add-cat" size="small" text type="primary" @click="quickAddCat">+ 新建分类</el-button>
+      <el-button class="add-cat" size="small" text type="warning" @click="router.push('/import')">导入 docx</el-button>
     </el-aside>
 
     <el-container>

@@ -16,6 +16,8 @@ const router = createRouter({
                 { path: 'question/new',   component: () => import('../views/QuestionEditView.vue') },
                 { path: 'question/:id',    component: () => import('../views/QuestionDetailView.vue') },
                 { path: 'question/:id/edit', component: () => import('../views/QuestionEditView.vue') },
+                { path: 'import', component: () => import('../views/ImportView.vue') },
+                { path: 'import/preview/:taskId', component: () => import('../views/ImportPreviewView.vue') },
             ],
         },
     ],

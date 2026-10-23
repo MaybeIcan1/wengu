@@ -55,4 +55,14 @@ public class CategoryServiceImpl extends ServiceImpl<CategoryMapper, Category> i
         vos.forEach(v -> v.setQuestionCount(counter.getOrDefault(v.getId(), 0L)));
         return vos;
     }
+
+    @Override
+    public Long getOrCreate(String name){
+        if (name == null || name.isBlank()) return null;
+        Category c = lambdaQuery().eq(Category::getName, name).one();
+        if (c != null) return c.getId();
+        CategoryDTO dto = new CategoryDTO();
+        dto.setName(name.length() > 50 ? name.substring(0, 50) : name);
+        return create(dto);
+    }
 }

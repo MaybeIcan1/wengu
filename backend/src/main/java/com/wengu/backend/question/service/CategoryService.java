@@ -9,4 +9,5 @@ import java.util.List;
 public interface CategoryService extends IService<Category> {
     Long create(CategoryDTO dto);          // 返回新分类id，方便前端立刻选中它
     List<CategoryVO> listWithCount();
+    Long getOrCreate(String name);
 }
