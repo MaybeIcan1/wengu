@@ -40,8 +40,8 @@ function removeIt() {
         <div class="topline">
           <span class="kicker">问答卡片</span>
           <div class="sp" />
-          <el-button link type="primary" @click="router.push(`/question/${d.id}/edit`)">编辑</el-button>
-          <el-button link type="danger" @click="removeIt">删除</el-button>
+          <button class="link-op" type="button" @click="router.push(`/question/${d.id}/edit`)">编辑</button>
+          <button class="link-op danger" type="button" @click="removeIt">删除</button>
         </div>
 
         <h1 class="title serif">{{ d.title }}</h1>

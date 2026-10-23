@@ -157,8 +157,8 @@ function remove(id: string) {
         <div class="right-col">
           <span class="date">{{ (r.updatedTime ?? '').slice(0, 10) }}</span>
           <span class="ops" @click.stop>
-            <el-button link type="primary" @click="goEdit(r.id)">编辑</el-button>
-            <el-button link type="danger" @click="remove(r.id)">删除</el-button>
+            <button class="link-op" type="button" @click="goEdit(r.id)">编辑</button>
+            <button class="link-op danger" type="button" @click="remove(r.id)">删除</button>
           </span>
         </div>
       </div>

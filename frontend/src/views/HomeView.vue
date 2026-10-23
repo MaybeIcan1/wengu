@@ -96,7 +96,7 @@ function logout() {
       <el-header class="head">
         <span class="hello">{{ store.nickname || '同学' }}，今天也要温故知新</span>
         <span class="avatar">{{ (store.nickname || '同')[0] }}</span>
-        <el-button link type="danger" class="logout" @click="logout">退出</el-button>
+        <button class="link-op danger logout" type="button" @click="logout">退出</button>
       </el-header>
       <el-main class="main"><router-view /></el-main>
     </el-container>

@@ -110,3 +110,13 @@ a { color: var(--brand-deep); text-decoration: none }
 
 /* 标题统一加粗（黑体），避免标题文案与背景融在一起 */
 h1, h2, h3, h4 { font-weight: 700 }
+
+/* 行内文本操作：无背景/无边框/无 hover 高亮框，只做透明度反馈 */
+.link-op {
+  background: transparent; border: none; box-shadow: none; outline: none;
+  padding: 2px 4px; font-size: var(--fs-12); line-height: 1.4;
+  color: var(--el-color-primary); cursor: pointer; font-family: inherit;
+  transition: opacity .15s ease;
+}
+.link-op:hover { background: transparent; color: var(--el-color-primary-dark-2) }
+.link-op.danger { color: var(--el-color-danger) }`n.link-op.danger:hover { color: var(--el-color-danger-dark-2) }
