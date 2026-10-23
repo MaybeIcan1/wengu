@@ -38,7 +38,7 @@
 ③ MQ 消费（无线程HTTP上下文）
                     ─ UserContext.set(userId)  ★ 身份随消息传递
                     ─ CAS 0→1（防重投重复解析）
-                    ─ BlockExtractor 抽块 → Segmenter 定边界 → Assembler 装配 → 逐条 INSERT t_import_draft
+                    ─ BlockExtractor 抽块 → Segmenter.detectMode 自动判标题语义 → 分段 → 装配 → 写草稿
                     ─ 任务 → status=2 待确认（total=草稿数）
 ④ 前端 SSE 看到 2 → 跳 /import/preview/{taskId}
 ⑤ 预览页（人工关卡）
@@ -444,11 +444,17 @@ public class BlockExtractor {
 
 关键约定：**决策层只输出索引，不输出内容**。这是 LLM 方案能安全插入的根基——模型最多把边界定错，永远改不了你的笔记正文。同时把"区间必须升序、不重叠、不越界"写进接口文档，因为将来 LLM 输出的 JSON 必须过这道校验。
 
-**为什么接口要带 `HeadingMode`？**（2026-10-22 用真实文档测出来的坑）：同一份 docx，Heading 可能是两种完全不同的东西——
+**为什么 Heading 语义要「自动猜 + 预览可纠正」？**（2026-10-22 用真实文档测出来的坑）：同一份 docx，Heading 可能是两种完全不同的东西——
 - 《测开八股整理》：`语言相关八股`、`计算机网络` 是**分类**
 - 《手撕思路》：`无重复字符最长子串`、`实现时间为nlogn的数组排序` 是**题目本身**
 
-一套规则不可能同时猜对两种语义，硬猜必然错一半。所以把它变成**上传时的一个明确选项**（前端单选框），而不是让代码赌。产品上这叫"把歧义交给人一次性声明"，比事后返工便宜得多。
+一套规则不可能同时猜对两种语义。但**不能在上传时问用户**——用户根本不知道"我这篇文档的标题算分类还是题目"（这属于文档内部结构，写文档时没人想过这个问题）。
+
+所以设计成两段式：
+1. **解析时自动检测**（`detectMode` 启发式）：看"每个 Heading 下平均有几道强规则题（①/数字/Q：）"+"每个标题下的内容厚度"——分类型文档每个分类下有多道题；题目型文档一个标题下就一段思路+代码
+2. **预览页给出可见的结论 + 一键纠正**：顶部显示「自动判断：标题即题目（5 个标题 / 每标题约 4 块内容）」；猜错了点一下切换 → 后端重新分段、草稿即时刷新
+
+> ★ 产品原则：**不要让用户回答他看不见的问题；把决定权放在他能看到结果的地方**。自动猜 + 事后纠正，永远优于事前盲选。
 
 ```java
 // importjob/parser/Segment.java —— 决策产物：只描述"索引区间 + 分类 + 依据"
@@ -488,6 +494,14 @@ public interface Segmenter {
      * 实现约定：Segment 必须按 titleIndex 升序、区间不重叠、索引在 [0, blocks.size()-1]。
      */
     List<Segment> segment(List<Block> blocks, HeadingMode mode);
+
+    /**
+     * 自动推断标题语义（用户不该被问这种问题）。
+     * 默认实现保守返回 CATEGORY；规则版按"每标题下强规则题数 + 内容厚度"启发式判断。
+     */
+    default HeadingMode detectMode(List<Block> blocks) {
+        return HeadingMode.CATEGORY;
+    }
 }
 ```
 
@@ -565,6 +579,34 @@ public class RuleSegmenter implements Segmenter {
     private void flush(List<Segment> out, int start, int end, String category, String rule) {
         if (start < 0 || end < start || rule == null) return;
         out.add(new Segment(start, end, category, rule));
+    }
+
+    /**
+     * ★ 自动推断标题语义（两段式设计的第一段）：
+     * 分类型文档：每个分类下有多道 ①/Q： 题 → strongPerHeading 大
+     * 题目型文档：一个标题下只有"思路+代码" → 几乎无强规则题，且内容薄
+     */
+    @Override
+    public HeadingMode detectMode(List<Block> blocks) {
+        int headings = 0, contentBlocks = 0, strongTitles = 0;
+        for (int i = 0; i < blocks.size(); i++) {
+            if (!Block.HEADING.equals(blocks.get(i).getKind())) continue;
+            headings++;
+            int end = i + 1;
+            while (end < blocks.size() && !Block.HEADING.equals(blocks.get(end).getKind())) end++;
+            contentBlocks += (end - i - 1);
+            for (int j = i + 1; j < end; j++) {
+                Block b = blocks.get(j);
+                if (Block.PARA.equals(b.getKind())
+                        && Patterns.Q_START.matcher(b.getText()).find()) strongTitles++;
+            }
+            i = end - 1;
+        }
+        if (headings == 0) return HeadingMode.CATEGORY;       // 无标题：按分类结构兜底
+        double strongPerHeading = (double) strongTitles / headings;
+        double blocksPerHeading = (double) contentBlocks / headings;
+        if (strongPerHeading >= 1.2) return HeadingMode.CATEGORY;   // 每类下有多题 → 分类
+        return blocksPerHeading < 6 ? HeadingMode.QUESTION : HeadingMode.CATEGORY;
     }
 
     private boolean isWeakTitle(String text) {
@@ -833,7 +875,10 @@ import java.util.Map;
 
 public interface ImportService extends IService<ImportTask> {
 
-    Long upload(MultipartFile file, Long userId, String headingMode);   // headingMode: CATEGORY | QUESTION
+    Long upload(MultipartFile file, Long userId);       // 标题语义由解析时自动检测
+
+    /** 预览页纠正标题语义：重新解析（仅 status=2 允许），返回新草稿数 */
+    int reparse(Long taskId, Long userId, String headingMode);
 
     /** 消费者入口：解析→写草稿→status=2（userId 来自消息，无线程上下文） */
     void parseToDrafts(Long taskId, Long userId);
@@ -911,7 +956,7 @@ public class ImportServiceImpl extends ServiceImpl<ImportTaskMapper, ImportTask>
 
     // ---------------- 上传 ----------------
     @Override
-    public Long upload(MultipartFile file, Long userId, String headingMode) {
+    public Long upload(MultipartFile file, Long userId) {
         if (file == null || file.isEmpty()) throw new BizException(400, "空文件");
         String name = file.getOriginalFilename();
         if (name == null || !name.toLowerCase().endsWith(".docx"))
@@ -935,7 +980,7 @@ public class ImportServiceImpl extends ServiceImpl<ImportTaskMapper, ImportTask>
         task.setFileName(name.length() > 200 ? name.substring(0, 200) : name);
         task.setFileHash(hash);
         task.setStoredPath(stored);
-        task.setHeadingMode("QUESTION".equalsIgnoreCase(headingMode) ? "QUESTION" : "CATEGORY");
+        task.setHeadingMode("CATEGORY");           // 占位，解析时用自动检测结果覆盖
         task.setStatus(0);
         task.setTotalCount(0); task.setSuccessCount(0); task.setFailCount(0);
         save(task);
@@ -963,42 +1008,74 @@ public class ImportServiceImpl extends ServiceImpl<ImportTaskMapper, ImportTask>
             ImportTask task = getById(taskId);
             if (task == null) return;
 
-            List<ParsedQuestion> parsed;
-            try (FileInputStream in = new FileInputStream(
-                    Paths.get(importDir, task.getStoredPath()).toFile())) {
-                List<Block> blocks = blockExtractor.extract(in);        // ① 结构化
-                List<Segment> segments = segmenter.segment(blocks,       // ② 定边界（可换 LLM 实现）
-                        Segmenter.HeadingMode.valueOf(task.getHeadingMode()));
-                parsed = questionAssembler.assemble(blocks, segments);  // ③ 装配原文
-            }
-
-            int seq = 0;
-            for (ParsedQuestion pq : parsed) {
-                ImportDraft d = new ImportDraft();
-                d.setTaskId(taskId);
-                d.setUserId(userId);
-                d.setSeq(seq++);
-                d.setTitle(pq.getTitle());
-                d.setAnswerMd(pq.getAnswer().toString());
-                d.setCategoryName(pq.getCategory());
-                d.setSource(pq.getSource());
-                d.setQType(0);
-                d.setRuleMatched(pq.getRule());
-                d.setSelected(1);
-                draftMapper.insert(d);
-            }
-
-            lambdaUpdate().eq(ImportTask::getId, taskId)
-                    .set(ImportTask::getStatus, 2)          // 待确认
-                    .set(ImportTask::getTotalCount, parsed.size())
-                    .update();
-            log.info("解析完成 taskId={} drafts={}", taskId, parsed.size());
+            List<Block> blocks = extractBlocks(task);
+            Segmenter.HeadingMode mode = segmenter.detectMode(blocks);   // ★ 自动推断，不问用户
+            int count = parseAndStore(task, userId, blocks, mode);
+            log.info("解析完成 taskId={} mode={} drafts={}", taskId, mode, count);
         } catch (Exception e) {
             log.error("解析失败 taskId={}", taskId, e);
             markFailed(taskId, userId, truncateRoot(e));
         } finally {
             UserContext.clear();                        // ★ 池化线程必清
         }
+    }
+
+    /** 预览页纠正标题语义：重新分段并重写草稿（仅待确认任务可操作） */
+    @Override
+    public int reparse(Long taskId, Long userId, String headingMode) {
+        UserContext.set(userId);
+        try {
+            ImportTask task = getById(taskId);
+            if (task == null) throw new BizException(404, "任务不存在");
+            if (task.getStatus() == null || task.getStatus() != 2)
+                throw new BizException(400, "只有待确认的任务可以重新解析");
+            Segmenter.HeadingMode mode = "QUESTION".equalsIgnoreCase(headingMode)
+                    ? Segmenter.HeadingMode.QUESTION : Segmenter.HeadingMode.CATEGORY;
+            return parseAndStore(task, userId, extractBlocks(task), mode);
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BizException(500, "重新解析失败：" + e.getClass().getSimpleName());
+        } finally {
+            UserContext.clear();
+        }
+    }
+
+    private List<Block> extractBlocks(ImportTask task) throws java.io.IOException {
+        try (FileInputStream in = new FileInputStream(
+                Paths.get(importDir, task.getStoredPath()).toFile())) {
+            return blockExtractor.extract(in);
+        }
+    }
+
+    /** 解析→清旧草稿→写新草稿→任务待确认；parseToDrafts 与 reparse 共用 */
+    private int parseAndStore(ImportTask task, Long userId, List<Block> blocks,
+                              Segmenter.HeadingMode mode) {
+        List<ParsedQuestion> parsed = questionAssembler.assemble(
+                blocks, segmenter.segment(blocks, mode));      // ② 定边界 ③ 装配原文
+        draftMapper.delete(com.baomidou.mybatisplus.core.toolkit.Wrappers
+                .<ImportDraft>lambdaQuery().eq(ImportDraft::getTaskId, task.getId()));
+        int seq = 0;
+        for (ParsedQuestion pq : parsed) {
+            ImportDraft d = new ImportDraft();
+            d.setTaskId(task.getId());
+            d.setUserId(userId);
+            d.setSeq(seq++);
+            d.setTitle(pq.getTitle());
+            d.setAnswerMd(pq.getAnswer().toString());
+            d.setCategoryName(pq.getCategory());
+            d.setSource(pq.getSource());
+            d.setQType(0);
+            d.setRuleMatched(pq.getRule());
+            d.setSelected(1);
+            draftMapper.insert(d);
+        }
+        lambdaUpdate().eq(ImportTask::getId, task.getId())
+                .set(ImportTask::getStatus, 2)               // 待确认
+                .set(ImportTask::getHeadingMode, mode.name()) // 记录生效的语义，预览页展示
+                .set(ImportTask::getTotalCount, parsed.size())
+                .update();
+        return parsed.size();
     }
 
     @Override
@@ -1258,9 +1335,15 @@ public class ImportController {
     }
 
     @PostMapping("/docx")
-    public Result<Long> upload(@RequestParam("file") MultipartFile file,
-                               @RequestParam(value = "headingMode", defaultValue = "CATEGORY") String headingMode) {
-        return Result.success(importService.upload(file, UserContext.requireUserId(), headingMode));
+    public Result<Long> upload(@RequestParam("file") MultipartFile file) {
+        return Result.success(importService.upload(file, UserContext.requireUserId()));
+    }
+
+    /** 预览页切换标题语义：CATEGORY | QUESTION，重新分段并刷新草稿 */
+    @PostMapping("/task/{id}/reparse")
+    public Result<Integer> reparse(@PathVariable Long id,
+                                   @RequestParam(value = "mode", defaultValue = "CATEGORY") String mode) {
+        return Result.success(importService.reparse(id, UserContext.requireUserId(), mode));
     }
 
     @GetMapping("/task/{id}")
@@ -1352,6 +1435,7 @@ wengu.import.segmenter=rule
 | GET | /import/task/{id} | 轮询兜底 |
 | GET | /import/task/{id}/progress?token= | SSE 进度（2/4/5 自动收尾） |
 | GET | /import/task/{id}/drafts | 预览草稿列表 |
+| POST | /import/task/{id}/reparse?mode= | 预览页切换标题语义，重新拆分 |
 | PUT | /import/draft/{id} | 改标题/分类/来源/勾选/题型 |
 | POST | /import/task/{id}/confirm | 确认转正 |
 | DELETE | /import/task/{id} | 放弃导入 |
@@ -1363,6 +1447,7 @@ wengu.import.segmenter=rule
 **② 设计思路（两个页面分工）**：
 - `ImportView` 只负责"上传 + 等解析"：上传后订阅 SSE，看到 status=2（草稿就绪）**立刻跳转**——不在上传页做编辑
 - `ImportPreviewView` 只负责"人工关卡"：改标题/分类、勾选、折叠看答案、确认/放弃。所有修改**即时落库**（防止刷新丢勾选），确认前再统一保存一遍兜底
+- **标题语义纠错放在预览页**（不在上传页）：顶部显示后端自动判断的结果（标题是分类/标题即题目），猜错一键切换 → 调 reparse 重新拆分。**用户只有看到拆分结果才知道该选哪个**——这是"别让用户回答他看不见的问题"的落地
 - 数据流与第 3 章保持一致：id 全字符串、请求走统一 `request.ts`（唯 FormData 除外）
 
 **③ 缺什么（清单）**：
@@ -1382,12 +1467,13 @@ wengu.import.segmenter=rule
 // api/import.ts（全量）
 import request from './request'
 
-export const uploadDocx = (file: File, headingMode: 'CATEGORY' | 'QUESTION') => {
+export const uploadDocx = (file: File) => {
   const fd = new FormData()
   fd.append('file', file)
-  fd.append('headingMode', headingMode)
   return request.post('/import/docx', fd)
 }
+export const reparse = (id: string, mode: 'CATEGORY' | 'QUESTION') =>
+  request.post(`/import/task/${id}/reparse?mode=${mode}`)
 export const getTask = (id: string) => request.get(`/import/task/${id}`)
 export const getDrafts = (id: string) => request.get(`/import/task/${id}/drafts`)
 export const updateDraft = (id: string, d: any) => request.put(`/import/draft/${id}`, d)
@@ -1410,7 +1496,6 @@ const store = useUserStore()
 
 const file = ref<File | null>(null)
 const taskId = ref<string>('')
-const docMode = ref<'CATEGORY' | 'QUESTION'>('CATEGORY')   // ★ 标题语义：分类标题 / 标题即题目
 const status = ref(0)
 const total = ref(0)
 const errorMsg = ref('')
@@ -1427,7 +1512,7 @@ async function start() {
   if (!file.value) { ElMessage.warning('先选一个 .docx 文件'); return }
   uploading.value = true
   try {
-    taskId.value = (await uploadDocx(file.value, docMode.value)) as unknown as string
+    taskId.value = (await uploadDocx(file.value)) as unknown as string
     status.value = 0
     subscribe(taskId.value)
   } finally { uploading.value = false }
@@ -1463,11 +1548,6 @@ onBeforeUnmount(() => { es?.close() })
       <div class="drop">把 docx 拖进来，或点击选择</div>
     </el-upload>
 
-    <el-radio-group v-model="docMode" class="mode">
-      <el-radio value="CATEGORY">标题是分类（如：测开八股整理）</el-radio>
-      <el-radio value="QUESTION">标题即题目（如：手撕思路）</el-radio>
-    </el-radio-group>
-
     <div class="ops">
       <el-button type="primary" :disabled="!file || uploading" :loading="uploading" @click="start">
         开始解析
@@ -1489,7 +1569,6 @@ onBeforeUnmount(() => { es?.close() })
 .wrap { border-radius: 14px; border: 1px solid var(--line); max-width: 760px }
 .soft { color: var(--ink-soft); font-size: 12px; line-height: 1.9 }
 .drop { padding: 26px 0; color: var(--ink-soft) }
-.mode { margin-top: 12px; display: flex; gap: 18px }
 .ops { margin: 16px 0 }
 .prog { display: flex; flex-direction: column; gap: 10px }
 .line { font-weight: 600; color: var(--ink) }
@@ -1504,7 +1583,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { MdPreview } from 'md-editor-v3'
 import 'md-editor-v3/lib/preview.css'
-import { getDrafts, updateDraft, confirmImport, discardImport } from '../api/import'
+import { getDrafts, getTask, reparse, updateDraft, confirmImport, discardImport } from '../api/import'
 import { listCategory } from '../api/category'
 
 const route = useRoute()
@@ -1515,6 +1594,9 @@ const loading = ref(true)
 const drafts = ref<any[]>([])
 const categories = ref<any[]>([])
 const submitting = ref(false)
+/** 当前生效的标题语义（后端自动检测结果，可在这里一键纠正） */
+const mode = ref<'CATEGORY' | 'QUESTION'>('CATEGORY')
+const reparsing = ref(false)
 
 const ruleName: Record<string, string> = { STRONG: '强识别', WEAK: '弱识别', SCATTER: '散记' }
 const ruleType: Record<string, string> = { STRONG: 'success', WEAK: 'warning', SCATTER: 'info' }
@@ -1522,11 +1604,28 @@ const selectedCount = computed(() => drafts.value.filter(d => d.selected).length
 
 onMounted(async () => {
   try {
-    const [ds, cs]: any[] = await Promise.all([getDrafts(taskId), listCategory()])
+    const [t, ds, cs]: any[] = await Promise.all([
+      getTask(taskId), getDrafts(taskId), listCategory(),
+    ])
+    mode.value = t.headingMode ?? 'CATEGORY'
     drafts.value = ds
     categories.value = cs
   } finally { loading.value = false }
 })
+
+/** 用户一键纠正标题语义 → 后端重新分段 → 刷新草稿（⚠️ 会覆盖已做的编辑） */
+async function switchMode(m: 'CATEGORY' | 'QUESTION') {
+  if (m === mode.value) return
+  await ElMessageBox.confirm(
+    '将按新的标题语义重新拆分，当前已修改的草稿会被重置，继续？', '重新解析', { type: 'warning' })
+  reparsing.value = true
+  try {
+    mode.value = m
+    await reparse(taskId, m)
+    drafts.value = (await getDrafts(taskId)) as any[]
+    ElMessage.success('已重新拆分')
+  } finally { reparsing.value = false }
+}
 
 async function saveDraft(d: any) {
   await updateDraft(d.id, {
@@ -1579,7 +1678,16 @@ async function discard() {
 
   <el-skeleton v-if="loading" :rows="8" animated />
 
-  <div v-else class="list">
+  <div v-else class="mode-bar">
+    <span class="soft">标题语义（自动判断，可纠正）：</span>
+    <el-radio-group v-model="mode" size="small" :disabled="reparsing" @change="switchMode">
+      <el-radio-button value="CATEGORY">标题是分类</el-radio-button>
+      <el-radio-button value="QUESTION">标题即题目</el-radio-button>
+    </el-radio-group>
+    <span class="soft">切换会重新拆分并覆盖当前草稿</span>
+  </div>
+
+  <div v-if="!loading" class="list">
     <el-card v-for="d in drafts" :key="d.id" class="item" shadow="never" :class="{ skipped: !d.selected }">
       <div class="row">
         <el-checkbox v-model="d.selected" :true-value="1" :false-value="0" @change="saveDraft(d)" />
@@ -1605,6 +1713,7 @@ async function discard() {
 .head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 14px }
 .soft { color: var(--ink-soft); font-size: 12px; line-height: 1.9; margin: 6px 0 0 }
 .ops { display: flex; gap: 8px; flex-shrink: 0 }
+.mode-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 12px }
 .list { display: flex; flex-direction: column; gap: 10px }
 .item { border-radius: 12px; border: 1px solid var(--line) }
 .item.skipped { opacity: .5 }
@@ -1643,8 +1752,10 @@ async function discard() {
 | T11 | 越权 | B 账号 GET A 的 drafts/confirm → 404 |
 | T12 | broker 停止时上传 | 接口仍返回 taskId；任务最终 5 且 errorMsg 有原因 |
 | T13 | 手撕文档 | 单格表格全部转 ```java 代码块（抽查 3 题） |
-| T14 | 《手撕思路》选 **标题即题目** | 5 个 Heading 各成一道题（title=算法名），答案含代码块；无"分类=算法名"的错误分类 |
-| T15 | 《手撕思路》选 **标题是分类**（对照） | 每个 Heading 变成分类、内容进散记——用来验证模式开关真的起作用（预期"不好"，属正确行为） |
+| T14 | 《手撕思路》自动检测 | 判定 QUESTION（每标题下无强规则题且内容薄）→ 5 个 Heading 各成一道题，答案含代码块 |
+| T15 | 《测开八股》自动检测 | 判定 CATEGORY（每分类下多道 ①/Q：）→ 分类正确、题数≈60+ |
+| T16 | 预览页切换语义 | 手撕文档手动切到 CATEGORY → 重新拆分成功（每个算法变分类、内容进散记），再切回 QUESTION 恢复 |
+| T17 | reparse 越权/状态 | 他人任务或非 status=2 → 400/404 |
 
 **验收清单**：
 - [ ] 13 条全绿
