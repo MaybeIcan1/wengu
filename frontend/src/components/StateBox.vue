@@ -10,7 +10,10 @@ defineProps<{
 
 <template>
   <el-skeleton v-if="loading" :rows="rows ?? 5" animated class="box-skeleton" />
-  <el-empty v-else-if="empty" :description="emptyText ?? '暂无内容'" class="box-empty" />
+  <el-empty v-else-if="empty" :description="emptyText ?? '暂无内容'" class="box-empty">
+    <!-- 空态行动区：由使用方决定放什么按钮（如"自己DIY / 一键导入"） -->
+    <slot name="empty" />
+  </el-empty>
   <slot v-else />
 </template>
 

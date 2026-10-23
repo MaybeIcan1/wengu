@@ -35,6 +35,22 @@ const qType = ref<number | undefined>(
 )
 const page = computed(() => Math.max(1, Number(route.query.page ?? 1)))
 
+/** 是否处于筛选态：决定空态该给"开始记录"还是"清除筛选" */
+const hasFilter = computed(() =>
+  !!((keyword.value ?? '').trim() || tagIds.value.length || qType.value !== undefined || categoryId.value)
+)
+const emptyText = computed(() =>
+  hasFilter.value ? '没有符合条件的题目' : '题库还是空的，先记一道吧'
+)
+
+function clearFilters() {
+  keyword.value = ''
+  tagIds.value = []
+  qType.value = undefined
+  router.replace({ query: {} })
+  load()
+}
+
 // 防抖：输入停 300ms 自动搜；Enter 立即搜
 const debouncedSearch = useDebounceFn(() => applyQuery(), 300)
 watch(keyword, debouncedSearch)
@@ -108,8 +124,21 @@ function remove(id: string) {
     <el-button type="warning" class="new-btn" @click="showCreate = true">+ 新建题目</el-button>
   </div>
 
-  <StateBox :loading="loading" :empty="!rows.length"
-    empty-text="还没有题目——去把你最近的八股记进来吧" :rows="8">
+  <StateBox :loading="loading" :empty="!rows.length" :empty-text="emptyText" :rows="8">
+    <!-- 空态行动区：真空 → 引导两种录入方式；筛选无结果 → 一键清除 -->
+    <template #empty>
+      <div v-if="!hasFilter" class="empty-actions">
+        <p class="empty-hint">把平时遇到的八股、笔试题收进来，之后就能按分类翻、按标签筛。</p>
+        <div class="empty-btns">
+          <el-button type="primary" size="large" @click="showCreate = true">自己 DIY</el-button>
+          <el-button size="large" @click="router.push('/import')">一键导入 docx</el-button>
+        </div>
+      </div>
+      <div v-else class="empty-actions">
+        <el-button size="large" @click="clearFilters">清除筛选条件</el-button>
+      </div>
+    </template>
+
     <div class="grid">
       <el-card v-for="r in rows" :key="r.id" shadow="never" class="card" @click="goDetail(r.id)">
         <div class="t">{{ r.title }}</div>
@@ -155,4 +184,7 @@ function remove(id: string) {
 .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 12px }
 .ops :deep(.el-button + .el-button) { margin-left: 2px }
 .pager { display: flex; justify-content: center; margin-top: 20px }
+.empty-actions { display: flex; flex-direction: column; align-items: center; gap: 4px }
+.empty-hint { max-width: 380px; color: var(--ink-soft); font-size: 12.5px; line-height: 1.9; margin: 0 0 6px }
+.empty-btns { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center }
 </style>
