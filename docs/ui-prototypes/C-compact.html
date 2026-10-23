@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>方向 C · 极简高密度</title>
+<style>
+  :root{
+    --bg:#fbfbfa; --panel:#ffffff; --rail:#f4f4f2; --ink:#141414; --ink2:#5c5c5c;
+    --ink3:#9b9b9b; --line:#e8e8e5; --accent:#e0613a; --accent-bg:#fdf0ea;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;font-size:13px}
+  .app{display:flex;height:900px}
+  .side{width:210px;background:var(--rail);border-right:1px solid var(--line);
+    padding:16px 10px;display:flex;flex-direction:column;gap:2px}
+  .brand{display:flex;align-items:center;gap:8px;padding:4px 8px 14px;font-weight:700;font-size:15px}
+  .brand i{width:7px;height:7px;background:var(--accent);border-radius:2px;display:inline-block}
+  .kbd{font-size:10.5px;color:var(--ink3);border:1px solid var(--line);border-radius:4px;padding:0 4px;background:#fff}
+  .sec{font-size:10.5px;color:var(--ink3);letter-spacing:1px;padding:12px 8px 4px;text-transform:uppercase}
+  .cat{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:6px;
+    color:var(--ink2);cursor:pointer;font-size:12.5px}
+  .cat:hover{background:#ebebe8}
+  .cat.on{background:#fff;color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+  .cat .n{color:var(--ink3);font-size:11px;font-variant-numeric:tabular-nums}
+  .grow{flex:1}
+  .new{display:flex;justify-content:space-between;align-items:center;border:1px solid var(--line);
+    background:#fff;border-radius:7px;padding:8px 10px;font-size:12.5px;cursor:pointer;color:var(--ink)}
+  .new:hover{border-color:var(--accent);color:var(--accent)}
+  .main{flex:1;display:flex;min-width:0;background:var(--panel)}
+  .list{width:540px;border-right:1px solid var(--line);display:flex;flex-direction:column}
+  .bar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line)}
+  .bar h1{font-size:14px;margin:0;font-weight:650}
+  .bar .n{color:var(--ink3);font-size:11.5px}
+  .bar .grow{flex:1}
+  .iconbtn{width:26px;height:26px;border-radius:6px;border:1px solid var(--line);background:#fff;
+    display:grid;place-items:center;color:var(--ink2);cursor:pointer;font-size:12px}
+  .iconbtn:hover{border-color:#d5d5d0}
+  .filter{display:flex;gap:6px;padding:10px 16px;border-bottom:1px solid var(--line)}
+  .f{font-size:11.5px;padding:4px 9px;border-radius:5px;color:var(--ink2);cursor:pointer;border:1px solid transparent}
+  .f:hover{background:#f6f6f3}
+  .f.on{background:var(--accent-bg);color:var(--accent);border-color:#f6d9cd}
+  .rows{flex:1;overflow:hidden}
+  .row{display:grid;grid-template-columns:1fr 64px 54px;gap:10px;align-items:center;
+    padding:10px 16px;border-bottom:1px solid #f2f2ef;cursor:pointer}
+  .row:hover{background:#fafaf8}
+  .row.on{background:#fdf7f3;box-shadow:inset 2px 0 0 var(--accent)}
+  .row .t{font-size:12.8px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .tags{display:flex;gap:4px;overflow:hidden}
+  .tg{font-size:10.5px;color:var(--ink3);background:#f4f4f1;border-radius:3px;padding:1px 5px;white-space:nowrap}
+  .row .date{font-size:10.5px;color:var(--ink3);text-align:right;font-variant-numeric:tabular-nums}
+  .row .lv{font-size:10.5px;color:var(--ink2);text-align:right}
+  .reader{flex:1;padding:22px 34px;overflow:hidden}
+  .reader .top{display:flex;align-items:center;gap:8px;color:var(--ink3);font-size:11px}
+  .reader .top .sp{flex:1}
+  .btn{font-size:11.5px;border:1px solid var(--line);border-radius:6px;padding:4px 9px;background:#fff;color:var(--ink2);cursor:pointer}
+  .btn:hover{border-color:#d5d5d0}
+  .btn.primary{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .reader h2{font-size:19px;line-height:1.5;margin:14px 0 6px;font-weight:650;letter-spacing:.2px}
+  .reader .meta{display:flex;gap:10px;color:var(--ink3);font-size:11px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+  .reader .body{font-size:13.5px;line-height:1.95;color:#2b2b2b}
+  .reader .body p{margin:14px 0}
+  .h{font-size:12.5px;font-weight:650;margin:18px 0 6px}
+  .code{background:#f7f7f4;border:1px solid var(--line);border-radius:6px;padding:12px 14px;
+    font-family:Consolas,monospace;font-size:11.5px;line-height:1.8;color:#333;white-space:pre}
+  .cmdk{margin-top:18px;display:flex;align-items:center;gap:8px;border:1px solid var(--line);
+    border-radius:7px;padding:8px 12px;color:var(--ink3);font-size:11.5px;background:#fff}
+  .cmdk .grow{flex:1}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><i></i>wengu<span class="kbd" style="margin-left:auto">⌘K</span></div>
+    <div class="sec">Library</div>
+    <div class="cat"><span>全部题目</span><span class="n">38</span></div>
+    <div class="cat on"><span>计算机网络</span><span class="n">12</span></div>
+    <div class="cat"><span>Java 语言</span><span class="n">9</span></div>
+    <div class="cat"><span>数据库</span><span class="n">7</span></div>
+    <div class="cat"><span>操作系统</span><span class="n">6</span></div>
+    <div class="cat"><span>JVM</span><span class="n">4</span></div>
+    <div class="grow"></div>
+    <button class="new"><span>＋ 新建题目</span><span class="kbd">N</span></button>
+  </aside>
+
+  <div class="main">
+    <section class="list">
+      <div class="bar">
+        <h1>计算机网络</h1><span class="n">12</span>
+        <div class="grow"></div>
+        <div class="iconbtn">⌕</div>
+        <div class="iconbtn">⇅</div>
+      </div>
+      <div class="filter">
+        <div class="f on">全部</div><div class="f">未掌握</div><div class="f">今日复习</div><div class="f">最近新增</div>
+      </div>
+      <div class="rows">
+        <div class="row on">
+          <div class="t">TCP 为什么握手要三次，挥手却要四次？</div>
+          <div class="tags"><span class="tg">#TCP</span><span class="tg">#高频</span></div>
+          <div class="date">10-20</div>
+        </div>
+        <div class="row">
+          <div class="t">浏览器从输入域名到页面出现，中间发生了什么？</div>
+          <div class="tags"><span class="tg">#DNS</span><span class="tg">#渲染</span></div>
+          <div class="date">10-18</div>
+        </div>
+        <div class="row">
+          <div class="t">HTTP 的无状态怎么理解？状态管理有哪些方案？</div>
+          <div class="tags"><span class="tg">#HTTP</span></div>
+          <div class="date">10-16</div>
+        </div>
+        <div class="row">
+          <div class="t">GET 与 POST 的本质区别是什么？</div>
+          <div class="tags"><span class="tg">#HTTP</span></div>
+          <div class="date">10-15</div>
+        </div>
+        <div class="row">
+          <div class="t">HTTPS 的握手过程，为什么两段式加密？</div>
+          <div class="tags"><span class="tg">#TLS</span><span class="tg">#高频</span></div>
+          <div class="date">10-14</div>
+        </div>
+        <div class="row">
+          <div class="t">DNS 解析的递归与迭代有什么区别？</div>
+          <div class="tags"><span class="tg">#DNS</span></div>
+          <div class="date">10-12</div>
+        </div>
+        <div class="row">
+          <div class="t">Cookie、Session、Token 三者的边界</div>
+          <div class="tags"><span class="tg">#认证</span></div>
+          <div class="date">10-10</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="reader">
+      <div class="top">
+        <span>计算机网络</span><span>/</span><span>#TCP</span><span>#高频</span>
+        <div class="sp"></div>
+        <button class="btn">编辑</button>
+        <button class="btn primary">开始复习</button>
+      </div>
+      <h2>TCP 为什么握手要三次，挥手却要四次？</h2>
+      <div class="meta"><span>来源：牛客</span><span>难度：中</span><span>更新于 10-20</span></div>
+      <div class="body">
+        <p>三次握手是为了让双方都确认「自己的发送能力和对方的接收能力」都正常；四次挥手则是因为 TCP 是全双工，双方需要各自关闭发送通道。</p>
+        <div class="h">握手时序</div>
+        <div class="code">Client                        Server
+  | -------- SYN (seq=x) -------> |
+  | <--- SYN+ACK (seq=y, ack=x+1) |
+  | -------- ACK (ack=y+1) -----> |</div>
+        <div class="h">为什么第三次握手不能省</div>
+        <p>它让服务端确认客户端确实收到了自己的 SYN-ACK，避免历史失效连接请求占用连接资源。</p>
+        <div class="cmdk"><span>⌘</span><span>输入命令…</span><div class="grow"></div><span class="kbd">esc</span></div>
+      </div>
+    </section>
+  </div>
+</div>
+</body>
+</html>
