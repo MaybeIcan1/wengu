@@ -62,14 +62,14 @@
   padding: 14px 16px;
   border-radius: 14px;
   background: rgba(255, 255, 255, .96);
-  color: #8a5b3f;
-  box-shadow: 0 12px 30px rgba(126, 67, 36, .18);
+  color: var(--ink);
+  box-shadow: 0 12px 30px rgba(31, 58, 88, .14);
 }
 .float-card p { font-size: 14px; margin: 6px 0 0 }
 .float-card .chip {
   font-size: 12px;
-  color: #e2735f;
-  background: #fdeee4;
+  color: var(--brand-deep);
+  background: var(--brand-soft);
   padding: 2px 10px;
   border-radius: 999px;
 }

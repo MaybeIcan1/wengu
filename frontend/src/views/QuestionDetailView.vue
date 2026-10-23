@@ -101,16 +101,16 @@ function removeIt() {
 .body :deep(.md-editor-preview h2) { font-size: 18px }
 .body :deep(.md-editor-preview h3) { font-size: 15.5px }
 .body :deep(.md-editor-preview blockquote) {
-  border-left: 2px solid var(--brand); background: #fff8ef;
+  border-left: 2px solid var(--brand); background: var(--quote-bg);
   margin: 16px 0; padding: 8px 16px; color: var(--ink-2);
 }
 .body :deep(.md-editor-preview pre) {
-  background: #f7f1e6; border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--r-sm);
   padding: 14px 16px; line-height: 1.85; font-size: 12.5px;
 }
 .body :deep(.md-editor-preview code) { font-family: var(--mono); font-size: 12.5px }
 .body :deep(.md-editor-preview table) { font-size: 13px }
-.body :deep(.md-editor-preview th) { background: #f7f1e6 }
+.body :deep(.md-editor-preview th) { background: var(--code-bg) }
 .body :deep(.md-editor-preview img) { border-radius: var(--r-sm); border: 1px solid var(--line) }
 .body :deep(.md-editor-preview)::-webkit-scrollbar { display: none }
 

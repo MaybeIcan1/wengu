@@ -32,10 +32,10 @@ async function submit() {
 </template>
 
 <style scoped>
-.title { margin: 0; font-size: 22px; color: #5d4634 }
-.sub { margin: 8px 0 22px; font-size: 13px; color: #a08a76 }
+.title { margin: 0; font-size: 22px; color: var(--ink) }
+.sub { margin: 8px 0 22px; font-size: 13px; color: var(--ink-3) }
 .go { width: 100%; background: var(--brand-grad); border: none; border-radius: 10px; height: 42px; font-weight: 600 }
 .go:hover, .go:focus { background: var(--brand-grad); border: none; filter: brightness(1.04) }
-.tail { text-align: center; margin-top: 16px; font-size: 13px; color: #a08a76 }
-.link { color: #e2735f; text-decoration: none }
+.tail { text-align: center; margin-top: 16px; font-size: 13px; color: var(--ink-3) }
+.link { color: var(--brand-deep); text-decoration: none }
 </style>

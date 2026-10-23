@@ -138,7 +138,7 @@ async function submit() {
 .page-head h1 { margin: 0; font-size: var(--fs-24); font-weight: 600; letter-spacing: .5px }
 .page-head .sub { margin: 6px 0 0; font-size: var(--fs-12); color: var(--ink-3) }
 .head-ops { display: flex; gap: var(--sp-2); flex-shrink: 0 }
-.primary-btn { background: var(--brand-grad); border: none; color: #fff; font-weight: 600; box-shadow: 0 8px 18px rgba(237, 125, 81, .28) }
+.primary-btn { background: var(--brand-grad); border: none; color: #fff; font-weight: 600; box-shadow: 0 8px 18px rgba(59, 130, 196, .26) }
 .primary-btn:hover, .primary-btn:focus { background: var(--brand-grad); filter: brightness(1.03) }
 .panel { border-radius: var(--r-lg); background: var(--paper) }
 .inline { display: flex; gap: var(--sp-2); flex-wrap: wrap }

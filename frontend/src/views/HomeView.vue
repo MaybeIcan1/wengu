@@ -117,7 +117,7 @@ function logout() {
 .brand .mark {
   width: 26px; height: 26px; border-radius: 9px; background: var(--brand-grad);
   color: #fff; font-size: 13px; display: grid; place-items: center; font-weight: 700;
-  box-shadow: 0 6px 14px rgba(237, 125, 81, .32);
+  box-shadow: 0 6px 14px rgba(59, 130, 196, .28);
 }
 .brand .name { font-size: var(--fs-17); font-weight: 700; color: var(--ink); letter-spacing: .5px }
 .brand .en { font-size: var(--fs-11); color: var(--ink-3); margin-left: 2px; letter-spacing: 1px }
@@ -138,7 +138,7 @@ function logout() {
   padding: 9px 10px; border-radius: var(--r-sm); cursor: pointer;
   color: var(--ink-2); font-size: var(--fs-13); transition: background .15s;
 }
-.cat-item:hover { background: #f6efe4 }
+.cat-item:hover { background: var(--hover) }
 .cat-item.active { background: var(--brand-soft); color: var(--brand-deep); font-weight: 600 }
 .cat-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .cnt { font-size: var(--fs-11); color: var(--ink-3); flex-shrink: 0 }
@@ -149,10 +149,10 @@ function logout() {
   background: var(--brand-grad); color: #fff; font-size: var(--fs-14); font-weight: 700;
   border-radius: var(--r-md); height: 42px;
   display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 10px 22px rgba(237, 125, 81, .30);
+  box-shadow: 0 10px 22px rgba(59, 130, 196, .26);
   transition: transform .15s, box-shadow .15s;
 }
-.create-btn:hover { transform: translateY(-1px); box-shadow: 0 14px 28px rgba(237, 125, 81, .38) }
+.create-btn:hover { transform: translateY(-1px); box-shadow: 0 14px 28px rgba(59, 130, 196, .36) }
 
 .right { min-width: 0 }
 .head {

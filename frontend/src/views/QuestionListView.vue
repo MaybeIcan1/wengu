@@ -179,7 +179,7 @@ function remove(id: string) {
 .page-head .sub { margin: 6px 0 0; font-size: var(--fs-12); color: var(--ink-3) }
 .primary-btn {
   background: var(--brand-grad); border: none; color: #fff; font-weight: 600;
-  box-shadow: 0 8px 18px rgba(237, 125, 81, .28); height: 38px; padding: 0 18px;
+  box-shadow: 0 8px 18px rgba(59, 130, 196, .26); height: 38px; padding: 0 18px;
 }
 .primary-btn:hover, .primary-btn:focus { background: var(--brand-grad); filter: brightness(1.03) }
 
@@ -198,7 +198,7 @@ function remove(id: string) {
   cursor: pointer; transition: background .15s;
 }
 .row:last-child { border-bottom: none }
-.row:hover { background: #fffaf2 }
+.row:hover { background: var(--hover) }
 .main-col { flex: 1; min-width: 0 }
 .t {
   font-size: var(--fs-15); font-weight: 600; color: var(--ink); line-height: 1.55;

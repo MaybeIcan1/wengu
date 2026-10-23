@@ -60,7 +60,7 @@ function go(path: string) { close(); router.push(path) }
   font-family: inherit;
 }
 .card:hover { border-color: var(--brand); transform: translateY(-2px);
-  box-shadow: 0 10px 28px rgba(151, 108, 72, .14) }
+  box-shadow: 0 10px 28px rgba(31, 58, 88, .12) }
 .ico { width: 26px; height: 26px; color: var(--brand-deep); margin-bottom: 12px }
 .name { font-size: 15px; font-weight: 650; color: var(--ink) }
 .desc { margin-top: 8px; font-size: 12px; line-height: 1.8; color: var(--ink-soft) }

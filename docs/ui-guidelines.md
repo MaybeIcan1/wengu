@@ -1,24 +1,24 @@
 # wengu UI 设计规范 v2
 
-> 方向：**A 的排版骨架（列表+阅读、衬线标题、细线分隔）+ B 的暖色质感（奶油底、渐变主色、柔和阴影）**
+> 方向：**A 的排版骨架（列表+阅读、衬线标题、细线分隔）+ 浅蓝专注配色（D 方案）**
 > 落地位置：`frontend/src/style.css`（tokens 与 Element Plus 主题覆盖）。改主题只动这一个文件。
-> 原型参考：`docs/ui-prototypes/A-editorial.png`、`B-soft.png`、`C-compact.png`
+> 原型参考：`docs/ui-prototypes/compare-colors.png`（四色对比）、`D-blue.png`（最终选定）
 
 ## 1. 色板
 
 | Token | 值 | 用途 |
 |---|---|---|
-| `--bg` | `#f7f3ec` | 页面底色（奶油） |
-| `--paper` | `#fffdf8` | 侧栏 / 阅读区纸面 |
+| `--bg` | `#f3f7fb` | 页面底色（浅蓝灰） |
+| `--paper` | `#fbfdff` | 侧栏 / 阅读区纸面 |
 | `--card` | `#ffffff` | 卡片 |
-| `--ink` | `#2f2a26` | 主文字 |
-| `--ink-2` | `#6f6357` | 次级文字 |
-| `--ink-3` | `#a1927f` | 弱化/时间/计数 |
-| `--line` | `#ece2d4` | 分隔线 |
-| `--brand` | `#ed7d51` | 品牌暖橙 |
-| `--brand-deep` | `#d96238` | 链接/强调 |
-| `--brand-soft` | `#fdeee4` | 选中态底色 |
-| `--brand-grad` | `135deg, #f0916a → #e2693f` | 主按钮/品牌标记 |
+| `--ink` | `#1f2a37` | 主文字 |
+| `--ink-2` | `#5b6b7c` | 次级文字 |
+| `--ink-3` | `#93a3b5` | 弱化/时间/计数 |
+| `--line` | `#e3ebf3` | 分隔线 |
+| `--brand` | `#3b82c4` | 品牌主蓝 |
+| `--brand-deep` | `#2f6ea8` | 链接/强调 |
+| `--brand-soft` | `#e8f2fb` | 选中态底色 |
+| `--brand-grad` | `135deg, #5aa2dd → #3b7fc0` | 主按钮/品牌标记 |
 
 ## 2. 字号阶梯（只用这几档）
 
