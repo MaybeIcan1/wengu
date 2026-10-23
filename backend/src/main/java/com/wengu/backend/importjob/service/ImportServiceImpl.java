@@ -53,7 +53,7 @@ public class ImportServiceImpl extends ServiceImpl<ImportTaskMapper, ImportTask>
 
     // ---------------- 上传 ----------------
     @Override
-    public Long upload(MultipartFile file, Long userId) {
+    public Long upload(MultipartFile file, Long userId, boolean force) {
         if (file == null || file.isEmpty()) throw new BizException(400, "空文件");
         String name = file.getOriginalFilename();
         if (name == null || !name.toLowerCase().endsWith(".docx"))
@@ -65,7 +65,7 @@ public class ImportServiceImpl extends ServiceImpl<ImportTaskMapper, ImportTask>
         String hash = sha256(bytes);
 
         // 幂等：同用户同内容（未终止的任务）直接复用
-        ImportTask exist = lambdaQuery()
+        ImportTask exist = force ? null : lambdaQuery()
                 .eq(ImportTask::getFileHash, hash)
                 .in(ImportTask::getStatus, 0, 1, 2, 3, 4)
                 .last("limit 1").one();

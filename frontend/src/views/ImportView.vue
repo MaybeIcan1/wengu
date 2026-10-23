@@ -16,6 +16,7 @@ const status = ref(0)
 const total = ref(0)
 const errorMsg = ref('')
 const uploading = ref(false)
+const forceReimport = ref(false)   // 忽略去重：解析规则升级后重新解析同一文件
 let es: EventSource | null = null
 
 const statusText = ['排队中…', '解析中…', '待确认（即将跳转预览）', '导入中…', '已完成', '已终止']
@@ -31,7 +32,7 @@ async function start() {
   if (!file.value) { ElMessage.warning('先选一个 .docx 文件'); return }
   uploading.value = true
   try {
-    taskId.value = (await uploadDocx(file.value)) as unknown as string
+    taskId.value = (await uploadDocx(file.value, forceReimport.value)) as unknown as string
     status.value = 0
     subscribe(taskId.value)
   } finally { uploading.value = false }
@@ -78,6 +79,7 @@ onBeforeUnmount(() => { es?.close() })
       <el-button type="primary" :disabled="!file || uploading" :loading="uploading" @click="start">
         开始解析
       </el-button>
+      <el-checkbox v-model="forceReimport" class="force">忽略去重（同一文件强制重新解析）</el-checkbox>
     </div>
 
     <div v-if="taskId" class="prog">
@@ -96,7 +98,8 @@ onBeforeUnmount(() => { es?.close() })
 .wrap { border-radius: 14px; border: 1px solid var(--line); max-width: 760px }
 .soft { color: var(--ink-soft); font-size: 12px; line-height: 1.9 }
 .drop { padding: 26px 0; color: var(--ink-soft) }
-.ops { margin: 16px 0 }
+.ops { margin: 16px 0; display: flex; align-items: center; gap: 14px; flex-wrap: wrap }
+.force { font-size: 12px; color: var(--ink-soft) }
 .prog { display: flex; flex-direction: column; gap: 10px }
 .line { font-weight: 600; color: var(--ink) }
 </style>

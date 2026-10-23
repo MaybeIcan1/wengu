@@ -52,8 +52,9 @@ public class ImportController {
     }
 
     @PostMapping("/docx")
-    public Result<Long> upload(@RequestParam("file") MultipartFile file) {
-        return Result.success(importService.upload(file, UserContext.requireUserId()));
+    public Result<Long> upload(@RequestParam("file") MultipartFile file,
+                               @RequestParam(value = "force", defaultValue = "false") boolean force) {
+        return Result.success(importService.upload(file, UserContext.requireUserId(), force));
     }
 
     /** 预览页切换标题语义：CATEGORY | QUESTION，重新分段并刷新草稿 */

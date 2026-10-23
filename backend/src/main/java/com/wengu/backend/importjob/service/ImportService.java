@@ -11,7 +11,7 @@ import java.util.Map;
 
 public interface ImportService extends IService<ImportTask> {
 
-    Long upload(MultipartFile file, Long userId);       // 标题语义由解析时自动检测
+    Long upload(MultipartFile file, Long userId, boolean force);   // force=true 忽略去重，强制重新解析
 
     /** 预览页纠正标题语义：重新解析（仅 status=2 允许），返回新草稿数 */
     int reparse(Long taskId, Long userId, String headingMode);

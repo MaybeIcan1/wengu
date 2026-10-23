@@ -37,7 +37,7 @@ public class BlockExtractor {
                 } else if (el instanceof XWPFTable t) {
                     if (isSingleCell(t)) {
                         blocks.add(new Block(blocks.size(), Block.CODE,
-                                "```java\n" + t.getRow(0).getCell(0).getText().trim() + "\n```\n"));
+                                "```java\n" + codeOf(t.getRow(0).getCell(0)) + "\n```\n"));
                     } else {
                         blocks.add(new Block(blocks.size(), Block.TABLE, toMarkdownTable(t)));
                     }
@@ -73,6 +73,35 @@ public class BlockExtractor {
 
     private boolean isSingleCell(XWPFTable t) {
         return t.getRows().size() == 1 && t.getRow(0).getTableCells().size() == 1;
+    }
+
+    /**
+     * 💣 实测坑（2026-10-23）：XWPFTableCell.getText() 会把单元格内所有段落【无分隔】拼成一个字符串，
+     * 代码表的"一行一个段落"会被挤成一行（多个函数挤在一起）。
+     * 正确姿势：逐段落取值，用 \n 连接；段落内的软换行 <w:br/> 也要转成 \n。
+     */
+    private String codeOf(XWPFTableCell cell) {
+        StringBuilder sb = new StringBuilder();
+        for (XWPFParagraph p : cell.getParagraphs()) {
+            sb.append(paragraphText(p)).append('\n');
+        }
+        // 去掉末尾多余空行
+        while (sb.length() > 0 && sb.charAt(sb.length() - 1) == '\n') {
+            sb.setLength(sb.length() - 1);
+        }
+        return sb.toString();
+    }
+
+    /** 段落文本（保留软换行）：run.text() 拿到文字，<w:br/> 数量补 \n */
+    private String paragraphText(XWPFParagraph p) {
+        StringBuilder sb = new StringBuilder();
+        for (XWPFRun r : p.getRuns()) {
+            String t = r.text();
+            if (t != null) sb.append(t);
+            int brCount = r.getCTR().sizeOfBrArray();
+            for (int i = 0; i < brCount; i++) sb.append('\n');
+        }
+        return sb.toString();
     }
 
     private String toMarkdownTable(XWPFTable t) {

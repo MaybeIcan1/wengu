@@ -334,6 +334,7 @@ public class Block {
 - `IBodyElement` 保序遍历（你若分开遍历段落和表格，代码块会全跑到答案末尾——第 5 章验收会查）
 - 图片**独立成块**：这样将来 LLM 能判断"这张图属于上一题还是下一题"，而不是被硬塞进段落
 - 单格表格 → CODE 块（你手撕文档的存储约定）；多格表格 → MARKDOWN 表
+- 💣 **代码单元格的换行陷阱**（2026-10-23 实测）：`XWPFTableCell.getText()` 会把单元格内所有段落**无分隔拼成一整串**——代码表"一行一个段落"，直接取 getText() 会得到"多个函数挤在一行"。必须逐段落取值再用 `\n` 连接（见下方 `codeOf`）
 
 ```java
 // importjob/parser/BlockExtractor.java —— POI → Block 列表（确定性，无业务决策）
@@ -375,7 +376,7 @@ public class BlockExtractor {
                 } else if (el instanceof XWPFTable t) {
                     if (isSingleCell(t)) {
                         blocks.add(new Block(blocks.size(), Block.CODE,
-                                "```java\n" + t.getRow(0).getCell(0).getText().trim() + "\n```\n"));
+                                "```java\n" + codeOf(t.getRow(0).getCell(0)) + "\n```\n"));
                     } else {
                         blocks.add(new Block(blocks.size(), Block.TABLE, toMarkdownTable(t)));
                     }
@@ -396,6 +397,32 @@ public class BlockExtractor {
 
     private boolean isSingleCell(XWPFTable t) {
         return t.getRows().size() == 1 && t.getRow(0).getTableCells().size() == 1;
+    }
+
+    /**
+     * 💣 代码单元格必须逐段落取（getText() 会把所有段落无分隔粘连，代码挤成一行）。
+     * 段落内的软换行 <w:br/> 也要还原成 \n。
+     */
+    private String codeOf(XWPFTableCell cell) {
+        StringBuilder sb = new StringBuilder();
+        for (XWPFParagraph p : cell.getParagraphs()) {
+            sb.append(paragraphText(p)).append('\n');
+        }
+        while (sb.length() > 0 && sb.charAt(sb.length() - 1) == '\n') {
+            sb.setLength(sb.length() - 1);          // 去掉末尾多余空行
+        }
+        return sb.toString();
+    }
+
+    private String paragraphText(XWPFParagraph p) {
+        StringBuilder sb = new StringBuilder();
+        for (XWPFRun r : p.getRuns()) {
+            String t = r.text();
+            if (t != null) sb.append(t);
+            int brCount = r.getCTR().sizeOfBrArray();
+            for (int i = 0; i < brCount; i++) sb.append('\n');
+        }
+        return sb.toString();
     }
 
     private String toMarkdownTable(XWPFTable t) {
@@ -875,7 +902,7 @@ import java.util.Map;
 
 public interface ImportService extends IService<ImportTask> {
 
-    Long upload(MultipartFile file, Long userId);       // 标题语义由解析时自动检测
+    Long upload(MultipartFile file, Long userId, boolean force);   // force=true 忽略去重，强制重新解析
 
     /** 预览页纠正标题语义：重新解析（仅 status=2 允许），返回新草稿数 */
     int reparse(Long taskId, Long userId, String headingMode);
@@ -956,7 +983,7 @@ public class ImportServiceImpl extends ServiceImpl<ImportTaskMapper, ImportTask>
 
     // ---------------- 上传 ----------------
     @Override
-    public Long upload(MultipartFile file, Long userId) {
+    public Long upload(MultipartFile file, Long userId, boolean force) {
         if (file == null || file.isEmpty()) throw new BizException(400, "空文件");
         String name = file.getOriginalFilename();
         if (name == null || !name.toLowerCase().endsWith(".docx"))
@@ -967,8 +994,8 @@ public class ImportServiceImpl extends ServiceImpl<ImportTaskMapper, ImportTask>
         try { bytes = file.getBytes(); } catch (Exception e) { throw new BizException(500, "读取文件失败"); }
         String hash = sha256(bytes);
 
-        // 幂等：同用户同内容（未终止的任务）直接复用
-        ImportTask exist = lambdaQuery()
+        // 幂等：同用户同内容（未终止的任务）直接复用；force=true 跳过（解析规则升级后重解析同一文件）
+        ImportTask exist = force ? null : lambdaQuery()
                 .eq(ImportTask::getFileHash, hash)
                 .in(ImportTask::getStatus, 0, 1, 2, 3, 4)
                 .last("limit 1").one();
@@ -1335,8 +1362,9 @@ public class ImportController {
     }
 
     @PostMapping("/docx")
-    public Result<Long> upload(@RequestParam("file") MultipartFile file) {
-        return Result.success(importService.upload(file, UserContext.requireUserId()));
+    public Result<Long> upload(@RequestParam("file") MultipartFile file,
+                               @RequestParam(value = "force", defaultValue = "false") boolean force) {
+        return Result.success(importService.upload(file, UserContext.requireUserId(), force));
     }
 
     /** 预览页切换标题语义：CATEGORY | QUESTION，重新分段并刷新草稿 */
@@ -1467,9 +1495,10 @@ wengu.import.segmenter=rule
 // api/import.ts（全量）
 import request from './request'
 
-export const uploadDocx = (file: File) => {
+export const uploadDocx = (file: File, force = false) => {
   const fd = new FormData()
   fd.append('file', file)
+  if (force) fd.append('force', 'true')   // 忽略去重，强制重新解析
   return request.post('/import/docx', fd)
 }
 export const reparse = (id: string, mode: 'CATEGORY' | 'QUESTION') =>
@@ -1756,9 +1785,10 @@ async function discard() {
 | T15 | 《测开八股》自动检测 | 判定 CATEGORY（每分类下多道 ①/Q：）→ 分类正确、题数≈60+ |
 | T16 | 预览页切换语义 | 手撕文档手动切到 CATEGORY → 重新拆分成功（每个算法变分类、内容进散记），再切回 QUESTION 恢复 |
 | T17 | reparse 越权/状态 | 他人任务或非 status=2 → 400/404 |
+| T18 | 代码格式 | 手撕文档导入后，代码块内**逐行还原**（`import ...\nimport ...\npublic class ...`），不得挤成一行 |
 
 **验收清单**：
-- [ ] 13 条全绿
+- [ ] 18 条全绿
 - [ ] 两份真实 docx 走完整链路（解析→预览→确认→题库）
 - [ ] 预览页弱识别条目人工复核后无"碎尸"题（连续段落被拆碎）
 - [ ] IDEA 控制台见「解析完成 taskId=… drafts=…」「消费者启动」

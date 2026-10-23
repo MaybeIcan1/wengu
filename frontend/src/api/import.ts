@@ -1,9 +1,10 @@
 import request from './request'
 
 /** 上传 docx（multipart）。标题语义由后端自动检测，预览页可纠正 */
-export const uploadDocx = (file: File) => {
+export const uploadDocx = (file: File, force = false) => {
   const fd = new FormData()
   fd.append('file', file)
+  if (force) fd.append('force', 'true')   // 忽略去重，强制重新解析
   return request.post('/import/docx', fd)
 }
 

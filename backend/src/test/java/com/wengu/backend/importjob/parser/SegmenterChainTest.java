@@ -55,6 +55,12 @@ class SegmenterChainTest {
         //                         ②「一个数组长度为n…」的代码以截图形式存在（IMAGE 块）
         assertTrue(withCode >= 3, "至少 3 题应包含代码块，实际=" + withCode);
 
+        // ✅ 代码格式契约：每行独占一行（cell.getText() 会挤成一行，必须逐段落还原）
+        ParsedQuestion first = questions.get(0);
+        String code = first.getAnswer().toString();
+        assertTrue(code.contains("```java\nimport java.util.HashSet;\nimport java.util.Scanner;\n"),
+                "代码应按原文档逐行保留，而不是挤成一行：\n" + code.substring(0, Math.min(200, code.length())));
+
         long empty = questions.stream()
                 .filter(q -> q.getAnswer().toString().contains("（空）"))
                 .count();
