@@ -79,6 +79,7 @@ CREATE TABLE t_import_task (
   file_name     VARCHAR(255) NOT NULL,
   file_hash     CHAR(64)     NOT NULL COMMENT 'SHA-256 幂等键',
   stored_path   VARCHAR(255) NOT NULL COMMENT 'yyyyMM/uuid.docx',
+  heading_mode  VARCHAR(10)  NOT NULL DEFAULT 'CATEGORY' COMMENT 'CATEGORY=标题是分类(八股整理)；QUESTION=标题即题目(手撕文档)',
   status        TINYINT      NOT NULL DEFAULT 0 COMMENT '0排队1解析中2待确认3导入中4完成5终止',
   total_count   INT          NOT NULL DEFAULT 0,
   success_count INT          NOT NULL DEFAULT 0,
@@ -144,6 +145,7 @@ public class ImportTask {
     private String fileName;
     private String fileHash;
     private String storedPath;
+    private String headingMode;    // CATEGORY / QUESTION（见 Segmenter.HeadingMode）
     private Integer status;
     private Integer totalCount;
     private Integer successCount;
@@ -442,6 +444,12 @@ public class BlockExtractor {
 
 关键约定：**决策层只输出索引，不输出内容**。这是 LLM 方案能安全插入的根基——模型最多把边界定错，永远改不了你的笔记正文。同时把"区间必须升序、不重叠、不越界"写进接口文档，因为将来 LLM 输出的 JSON 必须过这道校验。
 
+**为什么接口要带 `HeadingMode`？**（2026-10-22 用真实文档测出来的坑）：同一份 docx，Heading 可能是两种完全不同的东西——
+- 《测开八股整理》：`语言相关八股`、`计算机网络` 是**分类**
+- 《手撕思路》：`无重复字符最长子串`、`实现时间为nlogn的数组排序` 是**题目本身**
+
+一套规则不可能同时猜对两种语义，硬猜必然错一半。所以把它变成**上传时的一个明确选项**（前端单选框），而不是让代码赌。产品上这叫"把歧义交给人一次性声明"，比事后返工便宜得多。
+
 ```java
 // importjob/parser/Segment.java —— 决策产物：只描述"索引区间 + 分类 + 依据"
 package com.wengu.backend.importjob.parser;
@@ -466,11 +474,20 @@ package com.wengu.backend.importjob.parser;
 import java.util.List;
 
 public interface Segmenter {
+
+    /** 标题语义：同一份 docx，Heading 可能是一级分类，也可能就是题目本身 */
+    enum HeadingMode {
+        /** 标题=分类（如《测开八股整理》：语言相关八股/计算机网络/操作系统...） */
+        CATEGORY,
+        /** 标题=题目（如《手撕思路》：每个算法名就是一个 Heading） */
+        QUESTION
+    }
+
     /**
      * 只做"边界决策"：输入块序列，输出分段（索引区间），绝不修改任何文本内容。
      * 实现约定：Segment 必须按 titleIndex 升序、区间不重叠、索引在 [0, blocks.size()-1]。
      */
-    List<Segment> segment(List<Block> blocks);
+    List<Segment> segment(List<Block> blocks, HeadingMode mode);
 }
 ```
 
@@ -478,7 +495,7 @@ public interface Segmenter {
 
 它把 v2 的三档规则搬进决策层，行为完全等价。算法四步（先讲清再贴码）：
 
-1. **遇 HEADING**：先给"当前题""当前散记"收尾，再切换分类
+1. **遇 HEADING**：先给"当前题""当前散记"收尾，再按 `HeadingMode` 分叉——`CATEGORY` 切换分类；`QUESTION` 直接开新题（rule=STRONG，样式级强信号）
 2. **遇强规则**（①/数字/Q：开头）：收尾上一个，开新题（rule=STRONG）
 3. **遇弱规则**（分类内 + 当前题已有内容 + 短行无句读无逗号 + 非列表符号）：开新题（rule=WEAK）
 4. **其余**：有当前题就归它；没有就归散记区（SCATTER）——**散记区与当前题互斥**，所以不会重复收纳
@@ -498,7 +515,7 @@ import java.util.List;
 public class RuleSegmenter implements Segmenter {
 
     @Override
-    public List<Segment> segment(List<Block> blocks) {
+    public List<Segment> segment(List<Block> blocks, Segmenter.HeadingMode mode) {
         List<Segment> out = new ArrayList<>();
         String category = null;
         String currentRule = null;
@@ -508,11 +525,17 @@ public class RuleSegmenter implements Segmenter {
         for (int i = 0; i < blocks.size(); i++) {
             Block b = blocks.get(i);
 
-            if (Block.HEADING.equals(b.getKind())) {                  // 新分类：先收尾
+            if (Block.HEADING.equals(b.getKind())) {
+                // ★ 同一结构两种语义：先收尾，再由上传时声明的模式决定它是"分类"还是"题目"
                 flush(out, currentStart, i - 1, category, currentRule);
                 flush(out, scatterStart, i - 1, category, "SCATTER");
-                category = b.getText().replaceAll("^#+\\s*", "").trim();
                 currentStart = -1; scatterStart = -1; currentRule = null;
+                if (mode == Segmenter.HeadingMode.QUESTION) {
+                    currentStart = i;              // 标题即题目：直接开新题
+                    currentRule = "STRONG";        // 样式级强信号，与 ①/Q： 同级
+                } else {
+                    category = b.getText().replaceAll("^#+\\s*", "").trim();
+                }
                 continue;
             }
 
@@ -810,7 +833,7 @@ import java.util.Map;
 
 public interface ImportService extends IService<ImportTask> {
 
-    Long upload(MultipartFile file, Long userId);
+    Long upload(MultipartFile file, Long userId, String headingMode);   // headingMode: CATEGORY | QUESTION
 
     /** 消费者入口：解析→写草稿→status=2（userId 来自消息，无线程上下文） */
     void parseToDrafts(Long taskId, Long userId);
@@ -888,7 +911,7 @@ public class ImportServiceImpl extends ServiceImpl<ImportTaskMapper, ImportTask>
 
     // ---------------- 上传 ----------------
     @Override
-    public Long upload(MultipartFile file, Long userId) {
+    public Long upload(MultipartFile file, Long userId, String headingMode) {
         if (file == null || file.isEmpty()) throw new BizException(400, "空文件");
         String name = file.getOriginalFilename();
         if (name == null || !name.toLowerCase().endsWith(".docx"))
@@ -912,6 +935,7 @@ public class ImportServiceImpl extends ServiceImpl<ImportTaskMapper, ImportTask>
         task.setFileName(name.length() > 200 ? name.substring(0, 200) : name);
         task.setFileHash(hash);
         task.setStoredPath(stored);
+        task.setHeadingMode("QUESTION".equalsIgnoreCase(headingMode) ? "QUESTION" : "CATEGORY");
         task.setStatus(0);
         task.setTotalCount(0); task.setSuccessCount(0); task.setFailCount(0);
         save(task);
@@ -943,7 +967,8 @@ public class ImportServiceImpl extends ServiceImpl<ImportTaskMapper, ImportTask>
             try (FileInputStream in = new FileInputStream(
                     Paths.get(importDir, task.getStoredPath()).toFile())) {
                 List<Block> blocks = blockExtractor.extract(in);        // ① 结构化
-                List<Segment> segments = segmenter.segment(blocks);     // ② 定边界（可换 LLM 实现）
+                List<Segment> segments = segmenter.segment(blocks,       // ② 定边界（可换 LLM 实现）
+                        Segmenter.HeadingMode.valueOf(task.getHeadingMode()));
                 parsed = questionAssembler.assemble(blocks, segments);  // ③ 装配原文
             }
 
@@ -1233,8 +1258,9 @@ public class ImportController {
     }
 
     @PostMapping("/docx")
-    public Result<Long> upload(@RequestParam("file") MultipartFile file) {
-        return Result.success(importService.upload(file, UserContext.requireUserId()));
+    public Result<Long> upload(@RequestParam("file") MultipartFile file,
+                               @RequestParam(value = "headingMode", defaultValue = "CATEGORY") String headingMode) {
+        return Result.success(importService.upload(file, UserContext.requireUserId(), headingMode));
     }
 
     @GetMapping("/task/{id}")
@@ -1356,9 +1382,10 @@ wengu.import.segmenter=rule
 // api/import.ts（全量）
 import request from './request'
 
-export const uploadDocx = (file: File) => {
+export const uploadDocx = (file: File, headingMode: 'CATEGORY' | 'QUESTION') => {
   const fd = new FormData()
   fd.append('file', file)
+  fd.append('headingMode', headingMode)
   return request.post('/import/docx', fd)
 }
 export const getTask = (id: string) => request.get(`/import/task/${id}`)
@@ -1383,6 +1410,7 @@ const store = useUserStore()
 
 const file = ref<File | null>(null)
 const taskId = ref<string>('')
+const docMode = ref<'CATEGORY' | 'QUESTION'>('CATEGORY')   // ★ 标题语义：分类标题 / 标题即题目
 const status = ref(0)
 const total = ref(0)
 const errorMsg = ref('')
@@ -1399,7 +1427,7 @@ async function start() {
   if (!file.value) { ElMessage.warning('先选一个 .docx 文件'); return }
   uploading.value = true
   try {
-    taskId.value = (await uploadDocx(file.value)) as unknown as string
+    taskId.value = (await uploadDocx(file.value, docMode.value)) as unknown as string
     status.value = 0
     subscribe(taskId.value)
   } finally { uploading.value = false }
@@ -1435,6 +1463,11 @@ onBeforeUnmount(() => { es?.close() })
       <div class="drop">把 docx 拖进来，或点击选择</div>
     </el-upload>
 
+    <el-radio-group v-model="docMode" class="mode">
+      <el-radio value="CATEGORY">标题是分类（如：测开八股整理）</el-radio>
+      <el-radio value="QUESTION">标题即题目（如：手撕思路）</el-radio>
+    </el-radio-group>
+
     <div class="ops">
       <el-button type="primary" :disabled="!file || uploading" :loading="uploading" @click="start">
         开始解析
@@ -1456,6 +1489,7 @@ onBeforeUnmount(() => { es?.close() })
 .wrap { border-radius: 14px; border: 1px solid var(--line); max-width: 760px }
 .soft { color: var(--ink-soft); font-size: 12px; line-height: 1.9 }
 .drop { padding: 26px 0; color: var(--ink-soft) }
+.mode { margin-top: 12px; display: flex; gap: 18px }
 .ops { margin: 16px 0 }
 .prog { display: flex; flex-direction: column; gap: 10px }
 .line { font-weight: 600; color: var(--ink) }
@@ -1609,6 +1643,8 @@ async function discard() {
 | T11 | 越权 | B 账号 GET A 的 drafts/confirm → 404 |
 | T12 | broker 停止时上传 | 接口仍返回 taskId；任务最终 5 且 errorMsg 有原因 |
 | T13 | 手撕文档 | 单格表格全部转 ```java 代码块（抽查 3 题） |
+| T14 | 《手撕思路》选 **标题即题目** | 5 个 Heading 各成一道题（title=算法名），答案含代码块；无"分类=算法名"的错误分类 |
+| T15 | 《手撕思路》选 **标题是分类**（对照） | 每个 Heading 变成分类、内容进散记——用来验证模式开关真的起作用（预期"不好"，属正确行为） |
 
 **验收清单**：
 - [ ] 13 条全绿
