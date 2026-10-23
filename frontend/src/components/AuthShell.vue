@@ -39,13 +39,13 @@
 .brand-pane {
   position: relative;
   width: 42%;
-  background: linear-gradient(160deg, #f6b26b 0%, #ec8a6a 55%, #e2735f 100%);
+  background: var(--brand-grad);
   color: #fff;
   padding: 48px;
   overflow: hidden;
 }
 .brand-logo {
-  font-size: 26px;
+  font-size: 26px; font-family: var(--serif);
   font-weight: 700;
   letter-spacing: 1px;
 }
@@ -87,7 +87,7 @@
   width: 340px;
   padding: 36px 34px;
   border-radius: 18px;
-  background: #fffdf9;
+  background: var(--paper);
   box-shadow: 0 10px 40px rgba(151, 108, 72, .12);
 }
 

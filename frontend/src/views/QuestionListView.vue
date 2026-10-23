@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 题目列表：筛选/防抖/URL状态同步/三态/卡片网格
+// 题目列表：筛选/防抖/URL状态同步/三态/编辑式行列表
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -13,16 +13,15 @@ const route = useRoute()
 const router = useRouter()
 
 const loading = ref(false)
-const showCreate = ref(false)
 const rows = ref<any[]>([])
 const total = ref(0)
 const tags = ref<any[]>([])
+const showCreate = ref(false)
 
 const typeName = ['八股', '手撕', '主观题', '笔试题']
 const diffName = ['未标', '易', '中', '难']
-const diffType = [undefined, 'success', 'warning', 'danger'] as const
 
-// ---- 数据流层：条件与URL双向绑定（初始从URL还原；变化时replace回写） ----
+// ---- 数据流层：条件与URL双向绑定 ----
 const keyword = ref((route.query.k as string) ?? '')
 const categoryId = computed(() =>
   route.query.category ? (route.query.category as string) : undefined
@@ -35,7 +34,6 @@ const qType = ref<number | undefined>(
 )
 const page = computed(() => Math.max(1, Number(route.query.page ?? 1)))
 
-/** 是否处于筛选态：决定空态该给"开始记录"还是"清除筛选" */
 const hasFilter = computed(() =>
   !!((keyword.value ?? '').trim() || tagIds.value.length || qType.value !== undefined || categoryId.value)
 )
@@ -43,15 +41,6 @@ const emptyText = computed(() =>
   hasFilter.value ? '没有符合条件的题目' : '题库还是空的，先记一道吧'
 )
 
-function clearFilters() {
-  keyword.value = ''
-  tagIds.value = []
-  qType.value = undefined
-  router.replace({ query: {} })
-  load()
-}
-
-// 防抖：输入停 300ms 自动搜；Enter 立即搜
 const debouncedSearch = useDebounceFn(() => applyQuery(), 300)
 watch(keyword, debouncedSearch)
 
@@ -71,7 +60,6 @@ async function load() {
   } finally { loading.value = false }
 }
 
-/** 条件变化 → 静默写回URL（replace不污染历史栈）→ 触发load */
 function applyQuery() {
   router.replace({
     query: {
@@ -85,10 +73,18 @@ function applyQuery() {
   load()
 }
 
-watch(categoryId, () => { pageNumTo(1) })
+watch(categoryId, () => pageNumTo(1))
 
 function pageNumTo(n: number) {
   router.replace({ query: { ...route.query, page: n > 1 ? String(n) : undefined } })
+}
+
+function clearFilters() {
+  keyword.value = ''
+  tagIds.value = []
+  qType.value = undefined
+  router.replace({ query: {} })
+  load()
 }
 
 onMounted(async () => {
@@ -110,27 +106,32 @@ function remove(id: string) {
 </script>
 
 <template>
+  <div class="page-head">
+    <div>
+      <h1 class="serif">题目列表</h1>
+      <p class="sub">{{ total }} 道题<span v-if="hasFilter"> · 已筛选</span></p>
+    </div>
+    <el-button class="primary-btn" @click="showCreate = true">＋ 新建题目</el-button>
+  </div>
+
   <div class="bar">
-    <el-input v-model="keyword" placeholder="搜标题关键词…" clearable style="width: 220px"
-      @keyup.enter="applyQuery(); " @clear="applyQuery" />
-    <el-select v-model="tagIds" multiple collapse-tags placeholder="按标签筛" style="width: 190px"
+    <el-input v-model="keyword" placeholder="搜索标题关键词…" clearable class="search"
+      @keyup.enter="applyQuery" @clear="applyQuery" />
+    <el-select v-model="tagIds" multiple collapse-tags placeholder="按标签筛" class="sel"
       @change="applyQuery">
       <el-option v-for="t in tags" :key="t.id" :label="t.name" :value="Number(t.id)" />
     </el-select>
-    <el-select v-model="qType" clearable placeholder="题型" style="width: 120px" @change="applyQuery">
+    <el-select v-model="qType" clearable placeholder="题型" class="sel-sm" @change="applyQuery">
       <el-option v-for="(n, i) in typeName" :key="i" :label="n" :value="i" />
     </el-select>
-    <div class="flex-sp" />
-    <el-button type="warning" class="new-btn" @click="showCreate = true">+ 新建题目</el-button>
   </div>
 
   <StateBox :loading="loading" :empty="!rows.length" :empty-text="emptyText" :rows="8">
-    <!-- 空态行动区：真空 → 引导两种录入方式；筛选无结果 → 一键清除 -->
     <template #empty>
       <div v-if="!hasFilter" class="empty-actions">
         <p class="empty-hint">把平时遇到的八股、笔试题收进来，之后就能按分类翻、按标签筛。</p>
         <div class="empty-btns">
-          <el-button type="primary" size="large" @click="showCreate = true">自己 DIY</el-button>
+          <el-button class="primary-btn" size="large" @click="showCreate = true">自己 DIY</el-button>
           <el-button size="large" @click="router.push('/import')">一键导入 docx</el-button>
         </div>
       </div>
@@ -139,23 +140,28 @@ function remove(id: string) {
       </div>
     </template>
 
-    <div class="grid">
-      <el-card v-for="r in rows" :key="r.id" shadow="never" class="card" @click="goDetail(r.id)">
-        <div class="t">{{ r.title }}</div>
-        <div class="meta">
-          <el-tag size="small" effect="plain" round>{{ typeName[r.qType ?? 0] }}</el-tag>
-          <el-tag v-if="r.difficulty" size="small" effect="plain" round
-            :type="diffType[r.difficulty] ?? 'info'">{{ diffName[r.difficulty] }}</el-tag>
-          <span class="soft" v-for="tn in r.tagNames ?? []" :key="tn">#{{ tn }}</span>
+    <div class="rows">
+      <div v-for="r in rows" :key="r.id" class="row" @click="goDetail(r.id)">
+        <div class="main-col">
+          <div class="t">{{ r.title }}</div>
+          <div class="meta">
+            <span class="tag" v-for="tn in r.tagNames ?? []" :key="tn">#{{ tn }}</span>
+            <span class="dot" v-if="r.tagNames?.length"></span>
+            <span>{{ r.source || '未记来源' }}</span>
+            <span class="dot"></span>
+            <span>{{ typeName[r.qType ?? 0] }}</span>
+            <span class="dot" v-if="r.difficulty"></span>
+            <span v-if="r.difficulty">{{ diffName[r.difficulty] }}</span>
+          </div>
         </div>
-        <div class="foot">
-          <span class="soft">{{ r.source || '未记来源' }} · {{ (r.updatedTime ?? '').slice(0, 10) }}</span>
+        <div class="right-col">
+          <span class="date">{{ (r.updatedTime ?? '').slice(0, 10) }}</span>
           <span class="ops" @click.stop>
             <el-button link type="primary" @click="goEdit(r.id)">编辑</el-button>
             <el-button link type="danger" @click="remove(r.id)">删除</el-button>
           </span>
         </div>
-      </el-card>
+      </div>
     </div>
   </StateBox>
 
@@ -168,23 +174,55 @@ function remove(id: string) {
 </template>
 
 <style scoped>
-.bar { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap }
-.flex-sp { flex: 1 }
-.new-btn { background: var(--brand); border: none }
-.new-btn:hover, .new-btn:focus { background: var(--brand-deep); border: none }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px }
-.card {
-  cursor: pointer; border-radius: 14px; transition: all .18s ease;
-  border: 1px solid var(--line);
+.page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: var(--sp-4) }
+.page-head h1 { margin: 0; font-size: var(--fs-24); font-weight: 600; color: var(--ink); letter-spacing: .5px }
+.page-head .sub { margin: 6px 0 0; font-size: var(--fs-12); color: var(--ink-3) }
+.primary-btn {
+  background: var(--brand-grad); border: none; color: #fff; font-weight: 600;
+  box-shadow: 0 8px 18px rgba(237, 125, 81, .28); height: 38px; padding: 0 18px;
 }
-.card:hover { transform: translateY(-3px); box-shadow: var(--shadow-hover) }
-.t { font-weight: 600; color: var(--ink); line-height: 1.55; margin-bottom: 10px }
-.meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center }
-.soft { color: var(--ink-soft); font-size: 12px }
-.foot { display: flex; justify-content: space-between; align-items: center; margin-top: 12px }
-.ops :deep(.el-button + .el-button) { margin-left: 2px }
-.pager { display: flex; justify-content: center; margin-top: 20px }
+.primary-btn:hover, .primary-btn:focus { background: var(--brand-grad); filter: brightness(1.03) }
+
+.bar { display: flex; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-4); flex-wrap: wrap }
+.search { width: 260px }
+.sel { width: 190px }
+.sel-sm { width: 120px }
+
+.rows {
+  background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg);
+  overflow: hidden; box-shadow: var(--shadow-sm);
+}
+.row {
+  display: flex; align-items: center; gap: var(--sp-4);
+  padding: 15px 20px; border-bottom: 1px solid var(--line-soft);
+  cursor: pointer; transition: background .15s;
+}
+.row:last-child { border-bottom: none }
+.row:hover { background: #fffaf2 }
+.main-col { flex: 1; min-width: 0 }
+.t {
+  font-size: var(--fs-15); font-weight: 600; color: var(--ink); line-height: 1.55;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.meta { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: var(--fs-11); color: var(--ink-3) }
+.tag { color: var(--brand-deep); opacity: .85 }
+.dot { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-3); opacity: .5 }
+.right-col { display: flex; align-items: center; gap: var(--sp-4); flex-shrink: 0 }
+.date { font-size: var(--fs-11); color: var(--ink-3); font-variant-numeric: tabular-nums }
+.ops { opacity: 0; transition: opacity .15s; display: flex; gap: 2px }
+.row:hover .ops { opacity: 1 }
+.pager { display: flex; justify-content: center; margin-top: var(--sp-5) }
+
 .empty-actions { display: flex; flex-direction: column; align-items: center; gap: 4px }
-.empty-hint { max-width: 380px; color: var(--ink-soft); font-size: 12.5px; line-height: 1.9; margin: 0 0 6px }
+.empty-hint { max-width: 380px; color: var(--ink-3); font-size: var(--fs-12); line-height: 1.9; margin: 0 0 8px }
 .empty-btns { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center }
+
+@media (max-width: 768px) {
+  .search { width: 100% }
+  .sel, .sel-sm { width: calc(50% - 4px) }
+  .row { padding: 14px 14px; align-items: flex-start }
+  .right-col { flex-direction: column; align-items: flex-end; gap: 4px }
+  .ops { opacity: 1 }
+  .t { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical }
+}
 </style>

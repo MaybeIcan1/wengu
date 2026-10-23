@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 题目详情：三态包装 + 只读渲染
+// 题目详情：编辑式阅读排版（阅读优先）
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -15,7 +15,6 @@ const d = ref<any>(null)
 
 const typeName = ['八股', '手撕', '主观题', '笔试题']
 const diffName = ['未标', '易', '中', '难']
-const diffType = [undefined, 'success', 'warning', 'danger'] as const
 
 onMounted(async () => {
   try {
@@ -34,36 +33,91 @@ function removeIt() {
 </script>
 
 <template>
-  <StateBox :loading="loading"
-    :empty="!loading && !d" empty-text="题目不存在（可能已被删除或属于他人）" :rows="7">
-    <el-card v-if="d" class="wrap" shadow="never">
-      <div class="head">
-        <h2>{{ d.title }}</h2>
-        <div class="ops">
-          <el-tag effect="plain" round>{{ typeName[d.qType ?? 0] }}</el-tag>
-          <el-tag v-if="d.difficulty" effect="plain" round
-            :type="diffType[d.difficulty] ?? 'info'">{{ diffName[d.difficulty] }}</el-tag>
+  <StateBox :loading="loading" :empty="!loading && !d"
+    empty-text="题目不存在（可能已被删除或属于他人）" :rows="8">
+    <div v-if="d" class="reader-wrap">
+      <div class="reader">
+        <div class="topline">
+          <span class="kicker">问答卡片</span>
+          <div class="sp" />
           <el-button link type="primary" @click="router.push(`/question/${d.id}/edit`)">编辑</el-button>
           <el-button link type="danger" @click="removeIt">删除</el-button>
         </div>
+
+        <h1 class="title serif">{{ d.title }}</h1>
+
+        <div class="meta">
+          <span v-if="d.categoryName">{{ d.categoryName }}</span>
+          <span v-for="tn in d.tagNames ?? []" :key="tn" class="tag">#{{ tn }}</span>
+          <span>{{ typeName[d.qType ?? 0] }}</span>
+          <span v-if="d.difficulty">{{ diffName[d.difficulty] }}</span>
+          <span v-if="d.source">来源：{{ d.source }}</span>
+          <span class="push">{{ (d.updatedTime ?? '').slice(0, 10) }}</span>
+        </div>
+
+        <div class="body">
+          <MdPreview :modelValue="d.answerMd" previewTheme="github" code-theme="github" />
+        </div>
+
+        <div class="foot">
+          <el-button text @click="router.push('/question/list')">← 返回列表</el-button>
+        </div>
       </div>
-      <div class="meta">
-        <span v-if="d.categoryName" class="soft">📂 {{ d.categoryName }}</span>
-        <span v-for="tn in d.tagNames ?? []" :key="tn" class="soft">#{{ tn }}</span>
-        <span v-if="d.source" class="soft">来源：{{ d.source }}</span>
-      </div>
-      <MdPreview :modelValue="d.answerMd" previewTheme="github" code-theme="github" />
-      <div class="foot soft">最后更新：{{ (d.updatedTime ?? '').replace('T', ' ').slice(0, 16) }}</div>
-    </el-card>
+    </div>
   </StateBox>
 </template>
 
 <style scoped>
-.wrap { border-radius: 14px; border: 1px solid var(--line) }
-.head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px }
-.head h2 { margin: 0; color: var(--ink); font-size: 20px; line-height: 1.5 }
-.ops { display: flex; gap: 6px; align-items: center; flex-wrap: nowrap }
-.meta { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 18px }
-.soft { color: var(--ink-soft); font-size: 12px }
-.foot { margin-top: 24px }
+.reader-wrap { display: flex; justify-content: center }
+.reader {
+  width: 100%; max-width: 900px; background: var(--paper);
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: var(--sp-8) 44px var(--sp-6); box-shadow: var(--shadow-sm);
+}
+.topline { display: flex; align-items: center; gap: 8px }
+.kicker { font-size: var(--fs-11); letter-spacing: 3px; color: var(--brand-deep) }
+.sp { flex: 1 }
+.title {
+  margin: 12px 0 10px; font-size: var(--fs-26); font-weight: 600;
+  line-height: 1.45; color: var(--ink); letter-spacing: .3px;
+}
+.meta {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  font-size: var(--fs-11); color: var(--ink-3);
+  padding-bottom: var(--sp-4); border-bottom: 1px solid var(--line);
+}
+.tag { color: var(--brand-deep); opacity: .9 }
+.push { margin-left: auto }
+.body { margin-top: var(--sp-5) }
+
+/* 阅读排版：把 Markdown 渲染的正文调到适合长读 */
+.body :deep(.md-editor-preview) {
+  font-size: 14.5px; line-height: 2; color: #3d362f; background: transparent;
+}
+.body :deep(.md-editor-preview p) { margin: 14px 0 }
+.body :deep(.md-editor-preview h1),
+.body :deep(.md-editor-preview h2),
+.body :deep(.md-editor-preview h3) { color: var(--ink); font-weight: 650; margin: 22px 0 10px }
+.body :deep(.md-editor-preview h2) { font-size: 18px }
+.body :deep(.md-editor-preview h3) { font-size: 15.5px }
+.body :deep(.md-editor-preview blockquote) {
+  border-left: 2px solid var(--brand); background: #fff8ef;
+  margin: 16px 0; padding: 8px 16px; color: var(--ink-2);
+}
+.body :deep(.md-editor-preview pre) {
+  background: #f7f1e6; border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 14px 16px; line-height: 1.85; font-size: 12.5px;
+}
+.body :deep(.md-editor-preview code) { font-family: var(--mono); font-size: 12.5px }
+.body :deep(.md-editor-preview table) { font-size: 13px }
+.body :deep(.md-editor-preview th) { background: #f7f1e6 }
+.body :deep(.md-editor-preview img) { border-radius: var(--r-sm); border: 1px solid var(--line) }
+.body :deep(.md-editor-preview)::-webkit-scrollbar { display: none }
+
+.foot { margin-top: var(--sp-6); border-top: 1px solid var(--line); padding-top: var(--sp-3) }
+
+@media (max-width: 768px) {
+  .reader { padding: var(--sp-5) var(--sp-4); border-radius: var(--r-md) }
+  .title { font-size: var(--fs-20) }
+}
 </style>

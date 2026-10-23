@@ -1,25 +1,96 @@
-/* style.css —— wengu 品牌 tokens + 全局 reset（整文件替换；旧模板的 #app 定宽会在全局破坏布局） */
+/* ============================================================
+   wengu 设计系统 v2 —— A 的排版骨架 + B 的暖色质感
+   原则：阅读优先、层级清晰、状态完整、按钮文字绝对居中
+   ============================================================ */
 :root {
-  --brand: #ed7d51;             /* 主暖橙，改主题只动这里 */
-  --brand-deep: #df6b40;
-  --brand-bg: #fdeee4;
-  --cream: #f7f3ed;
-  --card: #fffdf9;
-  --line: #f0e7d9;
-  --ink: #5d4634;
-  --ink-soft: #a08a76;
-  --shadow-card: 0 10px 40px rgba(151, 108, 72, .10);
-  --shadow-hover: 0 14px 44px rgba(151, 108, 72, .18);
+  /* 色板 */
+  --bg: #f7f3ec;            /* 页面底 */
+  --paper: #fffdf8;         /* 阅读/侧栏纸面 */
+  --card: #ffffff;
+  --ink: #2f2a26;           /* 主文字 */
+  --ink-2: #6f6357;         /* 次级 */
+  --ink-3: #a1927f;         /* 弱化 */
+  --line: #ece2d4;          /* 细线 */
+  --line-soft: #f3ece1;
+  --brand: #ed7d51;         /* 暖橙 */
+  --brand-deep: #d96238;
+  --brand-soft: #fdeee4;
+  --brand-grad: linear-gradient(135deg, #f0916a, #e2693f);
+
+  /* 字号阶梯 */
+  --fs-11: 11px; --fs-12: 12px; --fs-13: 13px; --fs-14: 14px;
+  --fs-15: 15px; --fs-17: 17px; --fs-20: 20px; --fs-24: 24px; --fs-26: 26px;
+
+  /* 间距（4 的倍数） */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px;
+
+  /* 圆角 */
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-pill: 999px;
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(58, 51, 44, .04);
+  --shadow-md: 0 8px 24px rgba(151, 108, 72, .10);
+  --shadow-lg: 0 18px 48px rgba(151, 108, 72, .18);
+
+  /* 字体 */
+  --sans: "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, sans-serif;
+  --serif: Georgia, "Times New Roman", "Noto Serif SC", SimSun, serif;
+  --mono: "JetBrains Mono", Consolas, "Courier New", monospace;
+
+  /* Element Plus 主题对齐（改主题只动这里） */
+  --el-color-primary: #ed7d51;
+  --el-color-primary-light-3: #f2a184;
+  --el-color-primary-light-5: #f6bda8;
+  --el-color-primary-light-7: #fad7c9;
+  --el-color-primary-light-8: #fce3d9;
+  --el-color-primary-light-9: #fdeee4;
+  --el-color-primary-dark-2: #d96238;
+  --el-text-color-primary: #2f2a26;
+  --el-text-color-regular: #6f6357;
+  --el-text-color-secondary: #a1927f;
+  --el-border-color: #ece2d4;
+  --el-border-color-light: #f0e8dc;
+  --el-border-color-lighter: #f3ece1;
+  --el-fill-color-blank: #fffdf8;
+  --el-bg-color: #fffdf8;
+  --el-font-size-base: 13.5px;
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
 }
+
 * { box-sizing: border-box }
 html { font-size: 15px }
 body {
   margin: 0;
-  background: var(--cream);
+  background: var(--bg);
   color: var(--ink);
-  font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--sans);
   -webkit-font-smoothing: antialiased;
 }
 a { color: var(--brand-deep); text-decoration: none }
+
+/* 按钮文字居中兜底：无论内容如何都水平垂直居中 */
+.el-button { display: inline-flex; align-items: center; justify-content: center; letter-spacing: .3px }
+.el-button > span { display: inline-flex; align-items: center; justify-content: center; gap: 6px }
+
+/* 输入框：更柔和的描边与高度 */
+.el-input__wrapper, .el-select__wrapper { border-radius: var(--r-sm) }
+.el-input__wrapper { box-shadow: 0 0 0 1px var(--line) inset }
+.el-input__wrapper:hover { box-shadow: 0 0 0 1px #ddcdb8 inset }
+.el-input__wrapper.is-focus { box-shadow: 0 0 0 1px var(--brand) inset }
+
+/* 卡片统一 */
+.el-card { border-radius: var(--r-lg); border: 1px solid var(--line); box-shadow: var(--shadow-sm) }
+
+/* 滚动条 */
 ::-webkit-scrollbar { width: 8px; height: 8px }
 ::-webkit-scrollbar-thumb { background: #dccbb6; border-radius: 4px }
+::-webkit-scrollbar-track { background: transparent }
+
+/* 通用工具类 */
+.serif { font-family: var(--serif) }
+.muted { color: var(--ink-3) }
+
+/* 主按钮统一为品牌渐变（避免各页手写背景） */
+.el-button--primary { background: var(--brand-grad); border: none }
+.el-button--primary:hover, .el-button--primary:focus { background: var(--brand-grad); filter: brightness(1.04) }
