@@ -1,6 +1,7 @@
 # 06 · FSRS 复习系统（Phase 5）
 
-> 状态：⬜ 待开发 ｜ **v2（2026-10-24 需求变更：复习会话制 + 评分文案重构）**
+> 状态：⬜ 待开发 ｜ **v3（2026-10-24 需求变更：百词斩式"本轮回炉"——忘记/有点印象的卡在本轮内优先回归，直到十拿九稳）**
+> 沿革：v2 复习会话制（建题不建卡 + 到期优先/随机补足 + 评分文案重构）
 > 变更点：
 > ① **建卡不再发生在"新建题目"时**——题库只是仓库；用户点「开始复习」并选择分类后，才为该分类下所有题目**懒建卡**
 > ② 会话选题 = **到期优先（due ≤ now）+ 随机补足**（既尊重调度，又保证每次凑够题）
@@ -40,7 +41,10 @@
       ──> 回写 t_card（state/step/stability/difficulty/due/last_review/reps）
       ──> 追加 t_review_log
       ──> ZINCRBY 今日复习榜 +1
-      ──> 前端本地队列推进（不重新请求列表）
+      ──> 前端本地队列推进：
+            忘记/有点印象 → 该卡【排到队尾】本轮再考（百词斩式回炉）
+            十拿九稳/完全背诵 → 出队（本轮毕业）
+            同一张卡本轮最多 3 次，防止死循环
 ④ 签到（可选）：BitMap SETBIT → 连续天数从今天往回逐位扫描
 ⑤ 榜单：ZREVRANGE 今日复习榜 → 补昵称
 ```
@@ -261,6 +265,7 @@ public Question randomOne() {
 | 建卡时机 | **会话开始时批量懒建** | 题库是仓库，复习是动作；未复习的题不占调度 |
 | 选题 | **到期优先 + 随机补足** | 尊重 FSRS 的同时保证每次凑够题（纯随机会让刚背熟的题重复出现） |
 | 会话持久化 | **v1 不落库**（前端持有队列） | 刷新丢进度可接受；后续要做"断点续复"再加 session 表（债） |
+| 会话内回炉 | **前端队列实现**：1/2 分排到队尾，3/4 分出队；单卡本轮 ≤3 次 | 百词斩式"答错回炉"体验；后端接口零改动（rating 照常写 FSRS） |
 | fsrs.Card.cardId | `(int)(id & 0x7fffffff)` | 库 API 是 int，仅内部关联；业务主键仍是 Long |
 | 时间类型 | FSRS 用 Instant，DB 存 LocalDateTime | 统一经 `ZoneId.systemDefault()` 转换（时区差 8 小时会让 due 错位） |
 | 幂等 | 唯一键 + 撞键回查；评分不幂等（前端防连点） | 懒建卡可并发；评分必须一次算一次 |
@@ -773,6 +778,8 @@ spring.data.redis.password=redis123
 **② 设计思路**：
 - 准备阶段：分类 chips（含"全部"）+ 数量选择（5/10/20）+ 「开始复习」
 - 复习阶段：本地队列推进，一次拿全；翻面纯前端
+- **回炉规则（本章体验核心）**：评 1/2 → 卡排到队尾本轮再考；评 3/4 → 出队；单卡本轮 ≤3 次
+- 进度口径：**已掌握 / 总题数**（不是"第几张/共几张"，因为回炉会让队列变长）
 - 评分文案：**忘记 / 有点印象 / 十拿九稳 / 完全背诵**（颜色从红到绿）
 - 完成后：再来一轮 / 换分类 / 去题库
 
@@ -819,8 +826,11 @@ const categories = ref<any[]>([])
 const categoryId = ref<string | undefined>(undefined)
 const count = ref(10)
 
-const queue = ref<any[]>([])
+const queue = ref<any[]>([])          // 动态队列：回炉的卡会追加到队尾
 const idx = ref(0)
+const total = ref(0)                  // 本轮唯一题数（不含回炉重复）
+const mastered = ref<Set<string>>(new Set())   // 本轮达到"十拿九稳/完全背诵"的 cardId
+const attempts = ref<Record<string, number>>({}) // 每张卡本轮被评次数（防死循环）
 const showAnswer = ref(false)
 const rating = ref(false)
 
@@ -829,6 +839,7 @@ const rank = ref<any[]>([])
 
 const current = computed(() => queue.value[idx.value] ?? null)
 const finished = computed(() => phase.value === 'review' && !current.value)
+const progress = computed(() => total.value ? Math.round((mastered.value.size / total.value) * 100) : 0)
 
 const ratingOptions = [
   { value: 1, label: '忘记', cls: 'again' },
@@ -851,7 +862,10 @@ async function start() {
   try {
     const cards: any = await startSession(categoryId.value, count.value)
     if (!cards?.length) { ElMessage.info('这个分类下还没有题目'); return }
-    queue.value = cards
+    queue.value = [...cards]
+    total.value = cards.length
+    mastered.value = new Set()
+    attempts.value = {}
     idx.value = 0
     showAnswer.value = false
     phase.value = 'review'
@@ -861,8 +875,20 @@ async function start() {
 async function submitRating(value: number) {
   if (!current.value?.cardId || rating.value) return
   rating.value = true
+  const card = current.value
   try {
-    await rateCard(current.value.cardId, value)
+    await rateCard(card.cardId, value)
+    const cid = card.cardId as string
+    attempts.value[cid] = (attempts.value[cid] ?? 0) + 1
+
+    // ★ 百词斩式回炉：忘记/有点印象 → 排到队尾本轮再考；
+    //   达到"十拿九稳/完全背诵"或本轮已考 3 次 → 出队（交给 FSRS 后续调度）
+    if (value >= 3 || attempts.value[cid] >= 3) {
+      mastered.value.add(cid)
+    } else {
+      queue.value.push({ ...card, requeued: true })
+    }
+
     idx.value++
     showAnswer.value = false
     const [st, rk]: any[] = await Promise.all([checkinStatus(), todayRank(10)])
@@ -879,7 +905,10 @@ async function doCheckin() {
 async function randomOne() {
   const c: any = await getRandom()
   if (!c) { ElMessage.info('题库还是空的'); return }
-  queue.value = [c]
+  queue.value = [{ ...c, requeued: false }]
+  total.value = 1
+  mastered.value = new Set()
+  attempts.value = {}
   idx.value = 0
   showAnswer.value = false
   phase.value = 'review'
@@ -888,6 +917,9 @@ async function randomOne() {
 function backToSetup() {
   phase.value = 'setup'
   queue.value = []
+  total.value = 0
+  mastered.value = new Set()
+  attempts.value = {}
   idx.value = 0
 }
 </script>
@@ -937,7 +969,10 @@ function backToSetup() {
 
       <!-- 阶段二：复习 -->
       <el-card v-else-if="current" class="card" shadow="never">
-        <div class="kicker">问 答 卡 片 · {{ idx + 1 }} / {{ queue.length }}</div>
+        <div class="kicker">
+          问 答 卡 片 · 已掌握 {{ mastered.size }} / {{ total }}
+          <span v-if="current.requeued" class="retry-tag">回炉</span>
+        </div>
         <h2 class="title">{{ current.title }}</h2>
 
         <div v-if="!showAnswer" class="self-check">
@@ -969,10 +1004,9 @@ function backToSetup() {
         </div>
       </el-empty>
 
-      <div v-if="phase === 'review' && queue.length" class="progress-line">
-        <el-progress :percentage="Math.round((idx / Math.max(queue.length, 1)) * 100)"
-          :stroke-width="8" :show-text="false" />
-        <span class="muted">{{ idx }} / {{ queue.length }}</span>
+      <div v-if="phase === 'review' && total" class="progress-line">
+        <el-progress :percentage="progress" :stroke-width="8" :show-text="false" />
+        <span class="muted">{{ mastered.size }} / {{ total }}</span>
       </div>
     </section>
 
@@ -1017,6 +1051,10 @@ function backToSetup() {
 .count-row .grow { flex: 1 }
 
 .kicker { font-size: var(--fs-11); letter-spacing: 3px; color: var(--brand-deep) }
+.retry-tag {
+  margin-left: 8px; font-size: var(--fs-11); letter-spacing: 0;
+  background: #fdf0e6; color: #b9770e; border-radius: 999px; padding: 1px 8px;
+}
 .title { margin: 10px 0 18px; font-size: var(--fs-20); font-weight: 700; line-height: 1.5 }
 .self-check { padding: 26px 0 10px; display: flex; flex-direction: column; align-items: center; gap: 16px }
 .answer { border-top: 1px solid var(--line); padding-top: var(--sp-4) }
@@ -1108,6 +1146,8 @@ function refreshDue() { getSummary().then((s: any) => { dueCount.value = s.dueCo
 | T10 | 签到 | checkedToday=true、streak≥1；重复签到 bit 幂等 |
 | T11 | 榜单 | 复习 3 次后自己出现在今日榜且分数=3；昵称正确 |
 | T12 | 删题 | 对应卡被删除；再次开始会话不会出现该题 |
+| T13 | 回炉（核心体验） | 评"忘记/有点印象"→ 该卡在本轮**稍后再次出现**；评"十拿九稳/完全背诵"→ 不再出现 |
+| T14 | 回炉上限 | 同一张卡连续 3 次都评"忘记" → 第 3 次后出队（不无限循环），且 t_review_log 有 3 条记录 |
 
 **验收清单**：
 - [ ] 12 条全绿
@@ -1119,10 +1159,11 @@ function refreshDue() { getSummary().then((s: any) => { dueCount.value = s.dueCo
 > **债务登记**：
 > 1. 会话不落库（刷新丢进度）→ 后续要"断点续复"需加 t_review_session
 > 2. 随机补足会让"未到期题"提前出现 → 这是为了凑够数量的取舍；若你更想严格，可改成"仅到期"（配置项留到第 7 章）
-> 3. 随机问答不参与评分（纯浏览）→ 后续可加"顺手评分"
-> 4. 榜单不落库（3 天过期）→ 后续做历史榜/周榜再建快照
-> 5. 无 FSRS 参数优化（官方建议用 review_log 训练）→ 结项章进阶
-> 6. Element 组件全量引入 → 第 9 章按需导入
+> 3. 回炉会产生"同一张卡一轮多条日志"（短间隔重复）→ FSRS 支持 same-day review，视为正常；若后续要严格统计"每天复习题数"，需按 card_id 去重
+> 4. 随机问答不参与评分（纯浏览）→ 后续可加"顺手评分"
+> 5. 榜单不落库（3 天过期）→ 后续做历史榜/周榜再建快照
+> 6. 无 FSRS 参数优化（官方建议用 review_log 训练）→ 结项章进阶
+> 7. Element 组件全量引入 → 第 9 章按需导入
 
 ## 📦 本章交付物
 
