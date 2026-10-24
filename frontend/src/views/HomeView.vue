@@ -8,6 +8,7 @@ import { listCategory, createCategory } from '../api/category'
 import { getSummary } from '../api/review'
 import { useUserStore } from '../stores/user'
 import CreateChoiceDialog from '../components/CreateChoiceDialog.vue'
+import ProfileDialog from '../components/ProfileDialog.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -15,6 +16,7 @@ const store = useUserStore()
 const categories = ref<any[]>([])
 const dueCount = ref(0)
 const showCreate = ref(false)
+const showProfile = ref(false)
 
 const activeCategory = computed(() => (route.query.category ? String(route.query.category) : ''))
 
@@ -106,14 +108,19 @@ function logout() {
 
     <el-container class="right">
       <el-header class="head">
-        <span class="hello">{{ store.nickname || '同学' }}，今天也要温故知新</span>
-        <span class="avatar">{{ (store.nickname || '同')[0] }}</span>
+        <span class="hello">
+          {{ store.nickname || '同学' }}同学，祝你<span class="hl">「温故」</span>而知新。
+        </span>
+        <button class="avatar" type="button" title="个人设置" @click="showProfile = true">
+          {{ (store.nickname || '同')[0] }}
+        </button>
         <button class="link-op danger logout" type="button" @click="logout">退出</button>
       </el-header>
       <el-main class="main"><router-view /></el-main>
     </el-container>
 
     <CreateChoiceDialog v-model="showCreate" />
+    <ProfileDialog v-model="showProfile" />
   </el-container>
 </template>
 
@@ -191,11 +198,19 @@ function logout() {
   border-bottom: 1px solid var(--line); background: var(--paper);
 }
 .hello { flex: 1; color: var(--ink-2); font-size: var(--fs-13); font-weight: 600; letter-spacing: .2px }
+.hello .hl {
+  color: var(--brand-deep); font-weight: 700;
+  background: var(--brand-soft); padding: 1px 6px; border-radius: 6px;
+  letter-spacing: .5px;
+}
 .avatar {
   width: 30px; height: 30px; border-radius: 50%; background: var(--brand-soft);
   color: var(--brand-deep); display: grid; place-items: center;
   font-size: var(--fs-13); font-weight: 700;
+  border: 1px solid transparent; cursor: pointer; font-family: inherit;
+  transition: all .15s ease;
 }
+.avatar:hover { border-color: var(--brand); transform: translateY(-1px) }
 .logout { font-size: var(--fs-12) }
 .main { padding: var(--sp-6); background: var(--bg); overflow-y: auto }
 

@@ -8,3 +8,6 @@ export const loginApi = (d: { username: string; password: string }) =>
   request.post('/user/login', d)
 
 export const getMeApi = () => request.get('/user/me')
+
+export const updateProfileApi = (d: { nickname: string; email?: string }) =>
+  request.put('/user/profile', d)

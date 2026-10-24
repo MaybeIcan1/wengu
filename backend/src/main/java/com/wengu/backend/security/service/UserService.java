@@ -8,4 +8,7 @@ public interface UserService extends IService<User> {
     void register(RegisterDTO dto);
     LoginVO login(LoginDTO dto);
     UserVO me(Long userId);
+
+    /** 个人设置：修改昵称/邮箱（登录名不可改） */
+    UserVO updateProfile(Long userId, UpdateProfileDTO dto);
 }

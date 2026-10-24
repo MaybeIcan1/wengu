@@ -32,4 +32,9 @@ public class UserController {
     public Result<UserVO> me() {
         return Result.success(userService.me(UserContext.requireUserId()));
     }
+
+    @PutMapping("/profile")
+    public Result<UserVO> updateProfile(@Validated @RequestBody UpdateProfileDTO dto) {
+        return Result.success(userService.updateProfile(UserContext.requireUserId(), dto));
+    }
 }

@@ -42,4 +42,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                 .nickname(u.getNickname()).email(u.getEmail())
                 .build();                                  // ★ password 永远不进 VO
     }
+
+    @Override
+    public UserVO updateProfile(Long userId, UpdateProfileDTO dto) {
+        User u = getById(userId);
+        if (u == null) throw new BizException(401, "用户不存在");
+        u.setNickname(dto.getNickname().trim());
+        String email = dto.getEmail() == null ? null : dto.getEmail().trim();
+        u.setEmail(email == null || email.isEmpty() ? null : email);
+        updateById(u);
+        return me(userId);
+    }
 }
