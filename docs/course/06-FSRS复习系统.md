@@ -1,126 +1,130 @@
 # 06 · FSRS 复习系统（Phase 5）
 
-> 状态：⬜ 待开发 ｜ v1（2026-10-24）
-> 本章把"题库"变成"**每天会自己安排复习**的系统"。核心不是页面，而是三件事：
-> **调度算法（FSRS）** + **状态持久化（卡片/日志）** + **轻量激励（签到 BitMap / 打卡榜 ZSet）**。
+> 状态：⬜ 待开发 ｜ **v2（2026-10-24 需求变更：复习会话制 + 评分文案重构）**
+> 变更点：
+> ① **建卡不再发生在"新建题目"时**——题库只是仓库；用户点「开始复习」并选择分类后，才为该分类下所有题目**懒建卡**
+> ② 会话选题 = **到期优先（due ≤ now）+ 随机补足**（既尊重调度，又保证每次凑够题）
+> ③ 评分四档文案改为回忆质量递进：**忘记 / 有点印象 / 十拿九稳 / 完全背诵**（内部值 1~4 与 FSRS 映射不变）
 
 ---
 
 ## 🎯 本章目标与「我需要什么」
 
 **业务需求（讲人话）**：
-你刷了 60 道八股，但人的记忆会衰减。你想要的不是"收藏夹"，而是**每天早上打开就知道今天该复习哪 20 道**、答完给自己评个"忘记/困难/良好/简单"、系统自动安排下次出现时间；顺带用连续签到和今日复习榜给你一点坚持的动力。
+题库里躺着 60 道题，但你不希望"建题即复习"——**复习是一个主动动作**。你的用法应该是：
 
-**需要**：Phase 0~4 全绿；Redis 容器在线（`docker ps` 里有 `wg-redis`）；依赖已装：
-- `io.github.open-spaced-repetition:fsrs:1.0.0`（官方 Java 版 FSRS）
+> 今天想复习「计算机网络」→ 点开始复习 → 系统把这一类题全部纳入复习体系 → 随机抽 10 道做成考题卡片 → 我看题、自测、翻面、评分（忘记/有点印象/十拿九稳/完全背诵）→ 系统按 FSRS 安排下次出现时间。
+
+**需要**：Phase 0~4 全绿；Redis 容器在线；依赖已装：
+- `io.github.open-spaced-repetition:fsrs:1.0.0`
 - `spring-boot-starter-data-redis`
 
-> 💡 为什么用官方库而不是自己写 SM-2？FSRS 的公式与参数（19 个权重）是论文级产物，自己实现容易"看起来能跑、实际调度失真"。用官方库 + 自己掌握**状态机与数据落库**，是工程上的正确切分。
+> 💡 为什么用官方 FSRS 库？19 个权重的公式自己写容易"能跑但调度失真"。我们只负责**状态机 + 数据落库 + 会话体验**。
 
 ## 0️⃣ 本章全景：一次复习的完整旅程
 
 ```
-① 打开复习页
-   GET /review/today  ──> 查 t_card: due <= now ORDER BY due LIMIT 20（索引 idx_user_due）
-                      ──> 批量取题目（questionService.listByIds）→ 组装 TodayCardVO
-② 看题 → 点"显示答案"（纯前端翻转，不发请求）
-③ 评分（忘记/困难/良好/简单）
+① 进入复习页（还没有卡！）
+   选分类 + 选数量（默认 10）→ 点「开始复习」
+   POST /review/session/start?categoryId=xx&count=10
+      ──> 取该分类下所有题目（questionService.listByCategory）
+      ──> 懒建卡：缺卡的批量补 t_card（state=LEARNING, due=now）
+      ──> 选题：① 到期卡（due<=now）按 due 升序优先
+                ② 不够 N 张 → 从未到期卡里随机补足
+      ──> 返回本次会话的卡片列表（含题面+答案）
+② 看题 → 点"显示答案"（纯前端翻转）
+③ 评分（1 忘记 / 2 有点印象 / 3 十拿九稳 / 4 完全背诵）
    POST /review/{cardId}/rating?rating=3
-      ──> 载入 t_card → 映射成 fsrs.Card
-      ──> Scheduler.reviewCard(card, GOOD, now)  ← 算法在这里
+      ──> 载入 t_card → 映射 fsrs.Card
+      ──> Scheduler.reviewCard(card, GOOD, now)      ← 算法
       ──> 回写 t_card（state/step/stability/difficulty/due/last_review/reps）
-      ──> 追加 t_review_log（评分、前后状态、间隔）
-      ──> Redis ZINCRBY 今日复习榜 +1
-      ──> 返回下一张（前端本地队列推进）
-④ 签到（可选）
-   POST /checkin ──> BitMap SETBIT wengu:checkin:{uid}:{yyyyMM} (day-1) 1
-                 ──> 连续天数 = 从今天往回逐位 GETBIT 扫描
-⑤ 榜单
-   GET /rank/today ──> ZREVRANGE wengu:rank:review:{yyyyMMdd} WITHSCORES → 补昵称
+      ──> 追加 t_review_log
+      ──> ZINCRBY 今日复习榜 +1
+      ──> 前端本地队列推进（不重新请求列表）
+④ 签到（可选）：BitMap SETBIT → 连续天数从今天往回逐位扫描
+⑤ 榜单：ZREVRANGE 今日复习榜 → 补昵称
 ```
 
 **分层定位表**：
 
 | 层 | 产出 | 本层结束系统能干什么 |
 |---|---|---|
-| 1️⃣ 规格 | t_card / t_review_log + Redis key 规范 + FSRS 数值对照 | 知道"一次复习"要记哪些字段 |
-| 2️⃣ 数据层 | ReviewCardMapper / ReviewLogMapper + QuestionService.randomOne | 数据层可自证（到期查询走索引） |
-| 3️⃣ 业务编排 | ReviewService / CheckinService / RankService + 与 Question 的挂接 | 命令行/单测可跑通"评分→调度→落库" |
-| 4️⃣ 接口编排 | /review/* /checkin /rank/today /review/summary | Apifox 全流程可走 |
-| 5️⃣ 前端 | 复习页（翻转/评分/进度/签到/榜单）+ 侧栏入口 | 浏览器每天可用 |
+| 1️⃣ 规格 | t_card / t_review_log + Redis key + FSRS 数值/文案对照 | 数据形状钉死 |
+| 2️⃣ 数据层 | 两个 Mapper + QuestionService.listByCategory | 数据层可自证 |
+| 3️⃣ 业务 | ReviewService（懒建卡/会话选题/评分）、CheckinService、RankService | 评分→调度→落库可跑 |
+| 4️⃣ 接口 | /review/session/start、/review/{id}/rating、/checkin、/rank/today、/review/summary | Apifox 全流程可走 |
+| 5️⃣ 前端 | 复习页（选分类→开始→卡片流→评分）+ 侧栏入口/徽标 | 每天能用的闭环 |
 
 ## 1️⃣ 规格定义层（结束时：数据形状钉死）
 
-**先看 FSRS 的真实行为**（我用探针实测 `fsrs-1.0.0` 默认参数，写进笔记）：
+**FSRS 真实行为**（用探针实测 `fsrs-1.0.0` 默认参数）：
 
-| 评分 | 结果状态 | 下次到期 | stability | difficulty |
-|---|---|---|---|---|
-| 新卡（初始） | LEARNING | 立即 | null | null |
-| 1 忘记 AGAIN | LEARNING | +1 分钟 | 0.2172 | 7.0114 |
-| 2 困难 HARD | LEARNING | +5.5 分钟 | 1.1771 | 6.2431 |
-| 3 良好 GOOD | LEARNING | +10 分钟 | 3.2602 | 4.8846 |
-| 4 简单 EASY | **REVIEW**（毕业） | **+19 天** | 16.1507 | 2.4824 |
+| 评分（新文案） | 内部值 | 结果状态 | 下次到期 | stability | difficulty |
+|---|---|---|---|---|---|
+| 新卡（初始） | — | LEARNING | 立即 | null | null |
+| **忘记** | 1 (AGAIN) | LEARNING | +1 分钟 | 0.2172 | 7.0114 |
+| **有点印象** | 2 (HARD) | LEARNING | +5.5 分钟 | 1.1771 | 6.2431 |
+| **十拿九稳** | 3 (GOOD) | LEARNING | +10 分钟 | 3.2602 | 4.8846 |
+| **完全背诵** | 4 (EASY) | **REVIEW**（毕业） | **+19 天** | 16.1507 | 2.4824 |
 
-> ★ 抽问：为什么"简单"会直接毕业到 19 天后，而"良好"只有 10 分钟？——FSRS 用 stability（记忆稳定性）预测"多久后回忆成功率降到目标保留率"；EASY 把 stability 拉得最高，所以间隔最长。**调度不是拍脑袋的 1/3/7 天，而是由记忆参数算出来的。**
+> ★ 文案为什么重要：FSRS 的 Hard/Good/Easy 描述的是**回忆质量**，不是题目难度。直译成"困难/良好/简单"会让用户以为在评价题目，导致评分失真（评分失真 → 调度失真）。**「有点印象 / 十拿九稳 / 完全背诵」是用户能稳定自评的语义。**
 
 **DDL（Navicat 执行）**：
 
 ```sql
--- 复习卡：一题一卡，状态由 FSRS 维护
 CREATE TABLE t_card (
   id            BIGINT       NOT NULL,
   user_id       BIGINT       NOT NULL,
   question_id   BIGINT       NOT NULL,
-  state         TINYINT      NOT NULL DEFAULT 1 COMMENT '1学习 2复习 3重学（fsrs State）',
-  step          INT          NOT NULL DEFAULT 0 COMMENT '学习步骤下标',
-  stability     DOUBLE       DEFAULT NULL COMMENT '记忆稳定性',
-  difficulty    DOUBLE       DEFAULT NULL COMMENT '记忆难度',
-  due           DATETIME     NOT NULL COMMENT '下次到期（复习队列唯一依据）',
+  state         TINYINT      NOT NULL DEFAULT 1 COMMENT '1学习 2复习 3重学',
+  step          INT          NOT NULL DEFAULT 0,
+  stability     DOUBLE       DEFAULT NULL,
+  difficulty    DOUBLE       DEFAULT NULL,
+  due           DATETIME     NOT NULL COMMENT '下次到期（会话选题依据）',
   last_review   DATETIME     DEFAULT NULL,
-  reps          INT          NOT NULL DEFAULT 0 COMMENT '累计复习次数',
-  lapses        INT          NOT NULL DEFAULT 0 COMMENT '遗忘次数',
+  reps          INT          NOT NULL DEFAULT 0,
+  lapses        INT          NOT NULL DEFAULT 0,
   created_time  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_time  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   deleted       TINYINT      NOT NULL DEFAULT 0,
   PRIMARY KEY (id),
   UNIQUE KEY uk_user_question (user_id, question_id),
   KEY idx_user_due (user_id, due)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='复习卡';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='复习卡（懒创建：开始复习时才建）';
 
--- 复习日志：只追加，不更新（后续可做 FSRS 参数优化 / 统计）
 CREATE TABLE t_review_log (
-  id            BIGINT    NOT NULL,
-  user_id       BIGINT    NOT NULL,
-  card_id       BIGINT    NOT NULL,
-  question_id   BIGINT    NOT NULL,
-  rating        TINYINT   NOT NULL COMMENT '1忘记 2困难 3良好 4简单',
-  state_before  TINYINT   DEFAULT NULL,
-  state_after   TINYINT   DEFAULT NULL,
-  stability     DOUBLE    DEFAULT NULL,
-  difficulty    DOUBLE    DEFAULT NULL,
-  due_after     DATETIME  DEFAULT NULL,
-  elapsed_days  INT       DEFAULT NULL,
+  id             BIGINT   NOT NULL,
+  user_id        BIGINT   NOT NULL,
+  card_id        BIGINT   NOT NULL,
+  question_id    BIGINT   NOT NULL,
+  rating         TINYINT  NOT NULL COMMENT '1忘记 2有点印象 3十拿九稳 4完全背诵',
+  state_before   TINYINT  DEFAULT NULL,
+  state_after    TINYINT  DEFAULT NULL,
+  stability      DOUBLE   DEFAULT NULL,
+  difficulty     DOUBLE   DEFAULT NULL,
+  due_after      DATETIME DEFAULT NULL,
+  elapsed_days   INT      DEFAULT NULL,
   scheduled_days INT      DEFAULT NULL,
-  reviewed_at   DATETIME  NOT NULL,
-  created_time  DATETIME  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  reviewed_at    DATETIME NOT NULL,
+  created_time   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_user_time (user_id, reviewed_at),
   KEY idx_card (card_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='复习日志（只追加）';
 ```
 
-**字段理由**：
-- `idx_user_due (user_id, due)`：今日队列就是 `WHERE user_id=? AND due<=now ORDER BY due`，这个索引一条命中（EXPLAIN 会验）。
-- `uk_user_question`：一题一卡，**同时是并发创建卡的兜底**（撞唯一键 = 已存在）。
-- `stability/difficulty` 允许 NULL：新卡还没算过；用 Double 而不是 decimal，因为 FSRS 全程 double 运算。
-- 日志表**不更新**：审计与算法优化都需要历史全量；更新会丢"当时的判断"。
-- **Redis key 规范**（写死在本章，后续不散落）：
+**设计理由**：
+- `uk_user_question`：一题一卡；也是并发懒建卡的兜底（撞唯一键=别人已建）。
+- `idx_user_due (user_id, due)`：会话选题按到期排序。
+- 日志只追加：保留"当时的判断"，后续可做参数优化与统计。
+- **不再需要"建题即建卡"**：题库与复习解耦；未复习过的题在 t_card 里不存在是正常状态。
+- Redis key 规范：
   ```
-  wengu:checkin:{userId}:{yyyyMM}   位图，bit(day-1) = 1 表示当天签到
-  wengu:rank:review:{yyyyMMdd}      ZSet，member=userId，score=当日复习次数
+  wengu:checkin:{userId}:{yyyyMM}   位图 bit(day-1)
+  wengu:rank:review:{yyyyMMdd}      ZSet member=userId score=当日复习次数
   ```
 
-**实体（结构动作：新建包 `review`，子包 entity/mapper/service/controller/vo）**：
+**实体**（结构动作：新建包 `review` + 子包 entity/mapper/service/controller/vo）：
 
 ```java
 // review/entity/ReviewCard.java
@@ -186,11 +190,12 @@ public class ReviewLogEntity {
 
 ## 2️⃣ 数据访问层（结束时：数据层可自证）
 
-**① 我们现在要干嘛**：两张表都要 CRUD；另外"随机问答"需要一个随机取题能力（属于题目域，放 `QuestionService`）。
+**① 我们现在要干嘛**：两张表 CRUD + "按分类取题"（会话的输入）+ "随机一题"（随机问答入口）。
 
 **② 设计思路**：
-- 卡与日志都只继承 `BaseMapper`，查询条件用 LambdaQuery（类型安全、租户插件自动拼 user_id）
-- **随机取题不用 `ORDER BY RAND()`**（全表扫描 + 临时表排序）：改为"count 后随机 offset"，数据量小但习惯要正确（债：offset 大时仍扫行）
+- 卡/日志用 `BaseMapper` + LambdaQuery（租户插件自动拼 user_id）
+- 按分类取题属于题目域 → 加 `QuestionService.listByCategory`，**不让 review 域碰 QuestionMapper**
+- 随机取题用 count + 随机 offset（避免 `ORDER BY RAND()` 全表扫描）
 
 **③ 缺什么（清单）**：
 
@@ -198,7 +203,7 @@ public class ReviewLogEntity {
 |---|---|---|
 | ReviewCardMapper.java | review/mapper/ | BaseMapper |
 | ReviewLogMapper.java | review/mapper/ | BaseMapper |
-| QuestionService.randomOne() | **改既有** `question/service/QuestionService.java` | 随机一题（同域，避免跨域用 Mapper） |
+| QuestionService.listByCategory / randomOne | **改既有** `question/service/` | 会话输入 + 随机问答 |
 
 ```java
 // review/mapper/ReviewCardMapper.java
@@ -221,45 +226,53 @@ public interface ReviewLogMapper extends BaseMapper<ReviewLogEntity> {}
 ```
 
 ```java
-// QuestionService 接口新增一行
+// QuestionService 接口新增
+List<Question> listByCategory(Long categoryId);   // categoryId=null → 全部
 Question randomOne();
-```
 
-```java
-// QuestionServiceImpl 新增实现（用已有 count + offset，不写 RAND()）
+// QuestionServiceImpl 实现
+@Override
+public List<Question> listByCategory(Long categoryId) {
+    return lambdaQuery()
+            .eq(categoryId != null, Question::getCategoryId, categoryId)
+            .orderByDesc(Question::getUpdatedTime)
+            .list();
+}
+
 @Override
 public Question randomOne() {
     long total = lambdaQuery().count();
     if (total == 0) return null;
-    long offset = ThreadLocalRandom.current().nextLong(total);
+    long offset = java.util.concurrent.ThreadLocalRandom.current().nextLong(total);
     return lambdaQuery().last("limit 1 offset " + offset).one();
 }
 ```
 
-> ✅ 本小步可独立验收：`mvn test` 里写一条测试建 3 道题，随机 20 次应能覆盖到不同题（不要求概率均匀，只要求不报错）。
+> ✅ 本小步可独立验收：单测建 3 道题（两个分类）→ `listByCategory(分类A)` 只返回 A 的题；`randomOne()` 20 次不报错。
 
-## 3️⃣ 业务编排层（结束时：评分→调度→落库全链路可跑）
+## 3️⃣ 业务编排层（结束时：会话→评分→调度→落库全链路可跑）
 
-**① 我们现在要干嘛**：把 FSRS 算法包起来，形成三个业务能力——复习（队列/评分）、签到、榜单；并把"建题自动生成卡"挂到题目域。
+**① 我们现在要干嘛**：三个业务能力——**复习会话**（懒建卡 + 到期优先 + 随机补足）、**签到**（BitMap）、**榜单**（ZSet）。
 
-**② 设计思路（关键决策）**：
+**② 设计思路（决策表）**：
 
 | 决策 | 选择 | 理由 |
 |---|---|---|
-| 何时建卡 | **建题时自动建**（`ensureCard`），另给 SQL 回填历史 | 用户不需要理解"卡"的概念；历史数据用一条 SQL 补齐 |
-| 时间类型 | FSRS 用 `Instant`（UTC），DB 存 `DATETIME`（本地） | 统一用 `ZoneId.systemDefault()` 互转；**不要混用 LocalDateTime 与 Instant 比较** |
-| fsrs.Card 的 `cardId` | 用 `(int)(id & 0x7fffffff)` | 库的 cardId 是 int（仅内部标识），我们以数据库 Long 为准（★ 抽问） |
-| 幂等 | 唯一键 `uk_user_question` + 先查后插 | 并发建卡撞唯一键时回查即可（第 3 章 createIfAbsent 同款信仰） |
-| 日志 | 每次评分必写 | 只追加；后续做参数优化/统计都靠它 |
+| 建卡时机 | **会话开始时批量懒建** | 题库是仓库，复习是动作；未复习的题不占调度 |
+| 选题 | **到期优先 + 随机补足** | 尊重 FSRS 的同时保证每次凑够题（纯随机会让刚背熟的题重复出现） |
+| 会话持久化 | **v1 不落库**（前端持有队列） | 刷新丢进度可接受；后续要做"断点续复"再加 session 表（债） |
+| fsrs.Card.cardId | `(int)(id & 0x7fffffff)` | 库 API 是 int，仅内部关联；业务主键仍是 Long |
+| 时间类型 | FSRS 用 Instant，DB 存 LocalDateTime | 统一经 `ZoneId.systemDefault()` 转换（时区差 8 小时会让 due 错位） |
+| 幂等 | 唯一键 + 撞键回查；评分不幂等（前端防连点） | 懒建卡可并发；评分必须一次算一次 |
 
 **③ 缺什么（清单）**：
 
 | 文件 | 建在哪 | 角色 |
 |---|---|---|
-| ReviewService.java | review/service/ | 建卡 / 今日队列 / 评分调度 / 汇总 / 删题清卡 |
+| ReviewService.java | review/service/ | 会话选题 / 懒建卡 / 评分调度 / 汇总 / 删题清卡 |
 | CheckinService.java | review/service/ | BitMap 签到 + 连续天数 |
-| RankService.java | review/service/ | ZSet 今日复习榜 |
-| QuestionServiceImpl 挂接 | **改既有** | create 后 ensureCard；delete 时清卡 |
+| RankService.java | review/service/ | 今日复习榜 |
+| QuestionServiceImpl | **改既有** | delete 时清卡（**不再在 create 时建卡**） |
 
 **④ 代码**：
 
@@ -281,6 +294,7 @@ import com.wengu.backend.review.vo.TodayCardVO;
 import io.github.openspacedrepetition.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -289,6 +303,7 @@ import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -297,48 +312,153 @@ import java.util.stream.Collectors;
 public class ReviewService {
 
     private static final Scheduler FSRS = Scheduler.builder().build();
-    private static final int DEFAULT_LIMIT = 20;
 
     private final ReviewCardMapper cardMapper;
     private final ReviewLogMapper logMapper;
     private final QuestionService questionService;
     private final StringRedisTemplate redis;
 
-    // ---------------- 建卡 ----------------
-    /** 建题后调用；已存在则跳过（唯一键兜底并发） */
-    public void ensureCard(Long questionId) {
-        Long exists = cardMapper.selectCount(Wrappers.<ReviewCard>lambdaQuery()
-                .eq(ReviewCard::getQuestionId, questionId));
-        if (exists > 0) return;
-        ReviewCard c = new ReviewCard();
-        c.setQuestionId(questionId);
-        c.setState(State.LEARNING.getValue());
-        c.setStep(0);
-        c.setDue(LocalDateTime.now());     // 新卡立即到期 → 今天的队列里就能看到
-        c.setReps(0);
-        c.setLapses(0);
-        cardMapper.insert(c);              // userId 由 MetaObjectHandler 自动填充
+    // ---------------- 复习会话：懒建卡 + 到期优先 + 随机补足 ----------------
+    public List<TodayCardVO> startSession(Long categoryId, int count) {
+        int n = Math.min(Math.max(count, 1), 50);
+        List<Question> qs = questionService.listByCategory(categoryId);
+        if (qs.isEmpty()) return List.of();
+
+        List<Long> qids = qs.stream().map(Question::getId).toList();
+        ensureCards(qids);
+
+        List<ReviewCard> cards = cardMapper.selectList(Wrappers.<ReviewCard>lambdaQuery()
+                .in(ReviewCard::getQuestionId, qids));
+        LocalDateTime now = LocalDateTime.now();
+
+        // ① 到期卡优先（due 升序）
+        List<ReviewCard> due = cards.stream()
+                .filter(c -> c.getDue() != null && !c.getDue().isAfter(now))
+                .sorted(Comparator.comparing(ReviewCard::getDue))
+                .collect(Collectors.toCollection(ArrayList::new));
+        List<ReviewCard> picked = new ArrayList<>(due.subList(0, Math.min(due.size(), n)));
+
+        // ② 不足则从未到期卡里随机补足（★ 纯随机会让刚背熟的题重复出现，所以只做补足）
+        if (picked.size() < n) {
+            Set<Long> pickedIds = picked.stream().map(ReviewCard::getId).collect(Collectors.toSet());
+            List<ReviewCard> rest = cards.stream()
+                    .filter(c -> !pickedIds.contains(c.getId()))
+                    .collect(Collectors.toCollection(ArrayList::new));
+            Collections.shuffle(rest, ThreadLocalRandom.current());
+            picked.addAll(rest.subList(0, Math.min(rest.size(), n - picked.size())));
+        }
+        return toVOs(picked);
     }
 
-    /** 删题时清卡（避免队列里出现"题目已删除"） */
+    /** 懒建卡：只为缺卡的题插入；并发撞唯一键视为已存在 */
+    private void ensureCards(List<Long> questionIds) {
+        if (questionIds == null || questionIds.isEmpty()) return;   // ★ MP 空集合 in 会炸
+        Set<Long> exists = cardMapper.selectList(Wrappers.<ReviewCard>lambdaQuery()
+                        .select(ReviewCard::getQuestionId)
+                        .in(ReviewCard::getQuestionId, questionIds))
+                .stream().map(ReviewCard::getQuestionId).collect(Collectors.toSet());
+
+        for (Long qid : questionIds) {
+            if (exists.contains(qid)) continue;
+            ReviewCard c = new ReviewCard();
+            c.setQuestionId(qid);
+            c.setState(State.LEARNING.getValue());
+            c.setStep(0);
+            c.setDue(LocalDateTime.now());     // 新卡立即到期（本次会话即可考）
+            c.setReps(0);
+            c.setLapses(0);
+            try {
+                cardMapper.insert(c);          // userId 由 MetaObjectHandler 填充
+            } catch (DuplicateKeyException ignored) {
+                // 并发建卡：另一个请求已建，忽略
+            }
+        }
+    }
+
+    /** 删题时清卡 */
     public void removeByQuestion(Long questionId) {
         cardMapper.delete(Wrappers.<ReviewCard>lambdaQuery()
                 .eq(ReviewCard::getQuestionId, questionId));
     }
 
-    // ---------------- 今日队列 ----------------
-    public List<TodayCardVO> today(int limit) {
-        int n = Math.min(Math.max(limit, 1), 50);
-        List<ReviewCard> cards = cardMapper.selectList(Wrappers.<ReviewCard>lambdaQuery()
-                .le(ReviewCard::getDue, LocalDateTime.now())
-                .orderByAsc(ReviewCard::getDue)
-                .last("limit " + n));
-        if (cards.isEmpty()) return List.of();
+    public ReviewSummaryVO summary() {
+        Long due = cardMapper.selectCount(Wrappers.<ReviewCard>lambdaQuery()
+                .le(ReviewCard::getDue, LocalDateTime.now()));
+        return new ReviewSummaryVO(due == null ? 0 : due.intValue());
+    }
 
+    // ---------------- 评分调度（心脏） ----------------
+    @Transactional(rollbackFor = Exception.class)
+    public RatingResultVO rate(Long cardId, int rating) {
+        ReviewCard c = cardMapper.selectById(cardId);
+        if (c == null) throw new BizException(404, "卡片不存在");
+        Rating r = toRating(rating);
+
+        Card fsrsCard = Card.builder()
+                .cardId((int) (c.getId() & 0x7fffffff))
+                .state(toState(c.getState()))
+                .step(c.getStep())
+                .stability(c.getStability())
+                .difficulty(c.getDifficulty())
+                .due(toInstant(c.getDue()))
+                .lastReview(toInstant(c.getLastReview()))
+                .build();
+
+        Instant now = Instant.now();
+        CardAndReviewLog res = FSRS.reviewCard(fsrsCard, r, now);
+        Card nc = res.card();
+
+        int stateBefore = c.getState() == null ? State.LEARNING.getValue() : c.getState();
+        LocalDateTime lastReviewBefore = c.getLastReview();
+
+        c.setState(nc.getState().getValue());
+        c.setStep(nc.getStep());
+        c.setStability(nc.getStability());
+        c.setDifficulty(nc.getDifficulty());
+        c.setDue(toLocal(nc.getDue()));
+        c.setLastReview(toLocal(nc.getLastReview()));
+        c.setReps((c.getReps() == null ? 0 : c.getReps()) + 1);
+        if (r == Rating.AGAIN) c.setLapses((c.getLapses() == null ? 0 : c.getLapses()) + 1);
+        cardMapper.updateById(c);
+
+        ReviewLogEntity logRow = new ReviewLogEntity();
+        logRow.setCardId(c.getId());
+        logRow.setQuestionId(c.getQuestionId());
+        logRow.setRating(rating);
+        logRow.setStateBefore(stateBefore);
+        logRow.setStateAfter(nc.getState().getValue());
+        logRow.setStability(nc.getStability());
+        logRow.setDifficulty(nc.getDifficulty());
+        logRow.setDueAfter(toLocal(nc.getDue()));
+        logRow.setElapsedDays(lastReviewBefore == null ? 0
+                : (int) Math.max(0, ChronoUnit.DAYS.between(lastReviewBefore, LocalDateTime.now())));
+        logRow.setScheduledDays((int) Math.max(0,
+                ChronoUnit.DAYS.between(LocalDateTime.now(), toLocal(nc.getDue()))));
+        logRow.setReviewedAt(LocalDateTime.now());
+        logMapper.insert(logRow);
+
+        String day = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE);
+        redis.opsForZSet().incrementScore("wengu:rank:review:" + day, String.valueOf(c.getUserId()), 1);
+        redis.expire("wengu:rank:review:" + day, Duration.ofDays(3));
+
+        return new RatingResultVO(String.valueOf(c.getId()), nc.getState().getValue(),
+                c.getDue() == null ? null : c.getDue().toString(),
+                nc.getStability(), nc.getDifficulty());
+    }
+
+    // ---------------- 随机问答（单题，不参与评分） ----------------
+    public TodayCardVO random() {
+        Question q = questionService.randomOne();
+        if (q == null) return null;
+        return new TodayCardVO(null, String.valueOf(q.getId()), q.getTitle(), q.getAnswerMd(), null, null);
+    }
+
+    // ---------------- 工具 ----------------
+    private List<TodayCardVO> toVOs(List<ReviewCard> cards) {
+        if (cards.isEmpty()) return List.of();
         List<Long> qids = cards.stream().map(ReviewCard::getQuestionId).distinct().toList();
         Map<Long, Question> qs = questionService.listByIds(qids).stream()
                 .collect(Collectors.toMap(Question::getId, q -> q));
-
         return cards.stream().map(c -> {
             Question q = qs.get(c.getQuestionId());
             return new TodayCardVO(
@@ -351,92 +471,12 @@ public class ReviewService {
         }).toList();
     }
 
-    public ReviewSummaryVO summary() {
-        Long due = cardMapper.selectCount(Wrappers.<ReviewCard>lambdaQuery()
-                .le(ReviewCard::getDue, LocalDateTime.now()));
-        return new ReviewSummaryVO(due == null ? 0 : due.intValue());
-    }
-
-    // ---------------- 评分调度（本章心脏） ----------------
-    @Transactional(rollbackFor = Exception.class)
-    public RatingResultVO rate(Long cardId, int rating) {
-        ReviewCard c = cardMapper.selectById(cardId);
-        if (c == null) throw new BizException(404, "卡片不存在");
-        Rating r = toRating(rating);
-
-        // ① 实体 → fsrs.Card（★ 注意时间类型转换与 cardId 的 int 截断）
-        Card fsrsCard = Card.builder()
-                .cardId((int) (c.getId() & 0x7fffffff))
-                .state(toState(c.getState()))
-                .step(c.getStep())
-                .stability(c.getStability())
-                .difficulty(c.getDifficulty())
-                .due(toInstant(c.getDue()))
-                .lastReview(toInstant(c.getLastReview()))
-                .build();
-
-        // ② 算法：返回新卡 + 本次日志
-        Instant now = Instant.now();
-        CardAndReviewLog res = FSRS.reviewCard(fsrsCard, r, now);
-        Card nc = res.card();
-
-        int stateBefore = c.getState() == null ? State.LEARNING.getValue() : c.getState();
-        LocalDateTime lastReviewBefore = c.getLastReview();
-
-        // ③ 回写卡片
-        c.setState(nc.getState().getValue());
-        c.setStep(nc.getStep());
-        c.setStability(nc.getStability());
-        c.setDifficulty(nc.getDifficulty());
-        c.setDue(toLocal(nc.getDue()));
-        c.setLastReview(toLocal(nc.getLastReview()));
-        c.setReps((c.getReps() == null ? 0 : c.getReps()) + 1);
-        if (r == Rating.AGAIN) c.setLapses((c.getLapses() == null ? 0 : c.getLapses()) + 1);
-        cardMapper.updateById(c);
-
-        // ④ 追加日志（只追加）
-        ReviewLogEntity logRow = new ReviewLogEntity();
-        logRow.setCardId(c.getId());
-        logRow.setQuestionId(c.getQuestionId());
-        logRow.setRating(rating);
-        logRow.setStateBefore(stateBefore);
-        logRow.setStateAfter(nc.getState().getValue());
-        logRow.setStability(nc.getStability());
-        logRow.setDifficulty(nc.getDifficulty());
-        logRow.setDueAfter(toLocal(nc.getDue()));
-        logRow.setElapsedDays(lastReviewBefore == null ? 0
-                : (int) Math.max(0, ChronoUnit.DAYS.between(lastReviewBefore, LocalDateTime.now())));
-        logRow.setScheduledDays((int) Math.max(0, ChronoUnit.DAYS.between(LocalDateTime.now(), toLocal(nc.getDue()))));
-        logRow.setReviewedAt(LocalDateTime.now());
-        logMapper.insert(logRow);
-
-        // ⑤ 今日复习榜 +1（ZSet；member 用 userId 字符串）
-        String day = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE);
-        redis.opsForZSet().incrementScore("wengu:rank:review:" + day, String.valueOf(c.getUserId()), 1);
-        redis.expire("wengu:rank:review:" + day, Duration.ofDays(3));
-
-        return new RatingResultVO(
-                String.valueOf(c.getId()),
-                nc.getState().getValue(),
-                c.getDue() == null ? null : c.getDue().toString(),
-                nc.getStability(),
-                nc.getDifficulty());
-    }
-
-    // ---------------- 随机问答 ----------------
-    public TodayCardVO random() {
-        Question q = questionService.randomOne();
-        if (q == null) return null;
-        return new TodayCardVO(null, String.valueOf(q.getId()), q.getTitle(), q.getAnswerMd(), null, null);
-    }
-
-    // ---------------- 工具 ----------------
     private Rating toRating(int v) {
         return switch (v) {
-            case 1 -> Rating.AGAIN;
-            case 2 -> Rating.HARD;
-            case 3 -> Rating.GOOD;
-            case 4 -> Rating.EASY;
+            case 1 -> Rating.AGAIN;      // 忘记
+            case 2 -> Rating.HARD;       // 有点印象
+            case 3 -> Rating.GOOD;       // 十拿九稳
+            case 4 -> Rating.EASY;       // 完全背诵
             default -> throw new BizException(400, "评分必须是 1~4");
         };
     }
@@ -487,8 +527,7 @@ public class CheckinService {
         LocalDate today = LocalDate.now();
         String key = monthKey(uid, YearMonth.from(today));
         redis.opsForValue().setBit(key, today.getDayOfMonth() - 1L, true);
-        // 位图 key 必须给 TTL，否则永久堆积（跨月后 40 天清理，够算连续天数）
-        redis.expire(key, Duration.ofDays(40));
+        redis.expire(key, Duration.ofDays(40));   // ★ 位图 key 必须有 TTL，否则永久堆积
         return status();
     }
 
@@ -501,7 +540,7 @@ public class CheckinService {
         int streak = 0;
         for (int i = 0; i < 366; i++) {
             LocalDate d = today.minusDays(i);
-            if (i == 0 && !checkedToday) continue;      // 今天没签，从昨天开始算连续
+            if (i == 0 && !checkedToday) continue;   // 今天没签 → 从昨天开始算
             String k = monthKey(uid, YearMonth.from(d));
             if (Boolean.TRUE.equals(redis.opsForValue().getBit(k, d.getDayOfMonth() - 1L))) streak++;
             else break;
@@ -569,7 +608,7 @@ public class RankService {
 ```
 
 ```java
-// review/vo/ 全部用 record（只读出参，Jackson 直接序列化）
+// review/vo/（record，只读出参）
 // TodayCardVO.java
 package com.wengu.backend.review.vo;
 public record TodayCardVO(String cardId, String questionId, String title,
@@ -593,38 +632,22 @@ package com.wengu.backend.review.vo;
 public record ReviewSummaryVO(int dueCount) {}
 ```
 
-**挂接到题目域**（结构动作：打开 `QuestionServiceImpl`，注入 `ReviewService`，在 create/delete 里各加一行）：
-
-```java
-// QuestionServiceImpl 字段追加
-private final com.wengu.backend.review.service.ReviewService reviewService;
-
-// create(...) 末尾（return 之前）追加：
-reviewService.ensureCard(q.getId());
-
-// delete(...) 末尾追加：
-reviewService.removeByQuestion(id);
-```
-
-> ⚠️ 跨域调用方向是"题目域 → 复习域"（Service 调 Service），符合第 1 章定的规则。**不要让 ReviewService 反过来调 QuestionMapper。**
-
-> ★ 抽问三连：
-> 1. 为什么新卡 `due=now`？（答：让"今天新记的题"立即进入复习队列，而不是等明天）
-> 2. `fsrs.Card.cardId` 为什么截断成 int？（答：库的 API 用 int 标识卡，仅用于它内部日志关联；我们以数据库 Long 为准，截断不参与业务主键）
-> 3. 签到为什么要给 BitMap key 设 TTL？（答：每月一个 key，不设 TTL 会永久堆积；40 天足够跨月计算连续天数）
+**题目域挂接（结构动作：改 `QuestionServiceImpl`）**：
+- **不要**在 `create()` 里建卡（v2 变更点）
+- `delete()` 末尾追加：`reviewService.removeByQuestion(id);`（注入 ReviewService，跨域 Service 调 Service）
 
 ## 4️⃣ 接口编排层（结束时：Apifox 全流程可走）
 
-**① 我们现在要干嘛**：暴露复习/签到/榜单接口；参数校验与错误码沿用统一 Result。
-**② 设计思路**：评分用 `POST + query 参数`（简单、幂等语义明确）；随机问答返回完整题面与答案（前端翻转）；summary 给侧栏徽标。
+**① 我们现在要干嘛**：暴露"开始会话 / 评分 / 签到 / 榜单 / 汇总"。
+**② 设计思路**：会话开始用 `POST + query`（有副作用：懒建卡）；评分参数 1~4；随机问答独立入口。
 **③ 缺什么（清单）**：
 
 | 文件 | 建在哪 | 角色 |
 |---|---|---|
-| ReviewController.java | review/controller/ | /review/today、/review/{id}/rating、/review/random、/review/summary |
-| CheckinController.java | review/controller/ | /checkin、/checkin/status |
-| RankController.java | review/controller/ | /rank/today |
-| application.properties | **追加** | Redis 连接配置 |
+| ReviewController.java | review/controller/ | session/start、rating、random、summary |
+| CheckinController.java | review/controller/ | checkin、status |
+| RankController.java | review/controller/ | rank/today |
+| application.properties | **追加** | Redis 连接 |
 
 ```java
 // review/controller/ReviewController.java
@@ -647,9 +670,11 @@ public class ReviewController {
 
     private final ReviewService reviewService;
 
-    @GetMapping("/today")
-    public Result<List<TodayCardVO>> today(@RequestParam(defaultValue = "20") int limit) {
-        return Result.success(reviewService.today(limit));
+    /** 开始复习会话：懒建卡 + 到期优先 + 随机补足 */
+    @PostMapping("/session/start")
+    public Result<List<TodayCardVO>> start(@RequestParam(required = false) Long categoryId,
+                                           @RequestParam(defaultValue = "10") int count) {
+        return Result.success(reviewService.startSession(categoryId, count));
     }
 
     @GetMapping("/summary")
@@ -687,14 +712,10 @@ public class CheckinController {
     private final CheckinService checkinService;
 
     @PostMapping
-    public Result<CheckinStatusVO> checkin() {
-        return Result.success(checkinService.checkin());
-    }
+    public Result<CheckinStatusVO> checkin() { return Result.success(checkinService.checkin()); }
 
     @GetMapping("/status")
-    public Result<CheckinStatusVO> status() {
-        return Result.success(checkinService.status());
-    }
+    public Result<CheckinStatusVO> status() { return Result.success(checkinService.status()); }
 }
 ```
 
@@ -724,7 +745,7 @@ public class RankController {
 }
 ```
 
-**配置追加**（`application.properties`）：
+**配置追加**：
 
 ```properties
 spring.data.redis.host=localhost
@@ -734,52 +755,42 @@ spring.data.redis.password=redis123
 
 **路由表**：
 
-| 方法 | 路径 | 入参 | 出参 |
+| 方法 | 路径 | 入参 | 说明 |
 |---|---|---|---|
-| GET | /review/today?limit=20 | limit | List\<TodayCardVO\> |
-| GET | /review/summary | — | {dueCount} |
-| POST | /review/{cardId}/rating?rating=1..4 | rating | RatingResultVO |
-| GET | /review/random | — | TodayCardVO |
-| POST | /checkin | — | {checkedToday, streak, monthCount} |
-| GET | /checkin/status | — | 同上 |
-| GET | /rank/today?top=10 | top | List\<RankItemVO\> |
+| POST | /review/session/start?categoryId=&count=10 | 分类可空（空=全部） | 懒建卡 + 选题 |
+| GET | /review/summary | — | 到期总数（侧栏徽标） |
+| POST | /review/{cardId}/rating?rating=1..4 | 1忘记 2有点印象 3十拿九稳 4完全背诵 | 评分调度 |
+| GET | /review/random | — | 随机一道（不评分） |
+| POST | /checkin | — | 签到 |
+| GET | /checkin/status | — | 今日/连续/本月次数 |
+| GET | /rank/today?top=10 | — | 今日复习榜 |
 
-**历史数据回填**（你库里已有题目，需要补卡；`INSERT IGNORE` + 唯一键保证可重复执行）：
+> 历史数据**无需回填**：卡在第一次开始复习时自动补齐（这是 v2 懒建卡的自然结果）。
 
-```sql
-INSERT IGNORE INTO t_card
-  (id, user_id, question_id, state, step, due, reps, lapses, created_time, updated_time, deleted)
-SELECT UUID_SHORT(), q.user_id, q.id, 1, 0, NOW(), 0, 0, NOW(), NOW(), 0
-FROM t_question q
-WHERE q.deleted = 0;
-```
+## 5️⃣ 前端联调层（结束时：选分类→开始→卡片流）
 
-> 为什么回填可以用 `UUID_SHORT()` 而不是雪花？回填是一次性迁移，ID 只需唯一；日常插入仍走雪花（`ASSIGN_ID`）。
-
-## 5️⃣ 前端联调层（结束时：每天能用的复习闭环）
-
-**① 我们现在要干嘛**：一个"看题→自测→翻面→评分→下一张"的复习页，外加签到与今日榜；侧栏加带到期数量的入口。
-
+**① 我们现在要干嘛**：复习页分两阶段——**准备阶段**（选分类/数量）与**复习阶段**（卡片流+评分）；外加签到与今日榜。
 **② 设计思路**：
-- **本地队列推进**：一次取 20 张，评分后本地 index++，不每张都请求列表（省请求、翻页顺滑）
-- 题面/答案**一次拿全**，翻转纯前端（不重复请求）
-- 空态三种：今日已清空 / 没有题目（引导导入）/ 加载失败
-- 侧栏徽标：进入页面时取 `/review/summary` + `/checkin/status`，路由变化时刷新（复用第 4 章的导航级刷新经验）
+- 准备阶段：分类 chips（含"全部"）+ 数量选择（5/10/20）+ 「开始复习」
+- 复习阶段：本地队列推进，一次拿全；翻面纯前端
+- 评分文案：**忘记 / 有点印象 / 十拿九稳 / 完全背诵**（颜色从红到绿）
+- 完成后：再来一轮 / 换分类 / 去题库
 
 **③ 缺什么（清单）**：
 
 | 文件 | 建在哪 | 角色 |
 |---|---|---|
-| api/review.ts | frontend/src/api/ | 6 个接口翻译 |
-| views/ReviewView.vue | frontend/src/views/ | 复习页 |
-| router/index.ts | **改既有** | 加 `review` 子路由 |
-| HomeView.vue | **改既有** | 侧栏加「开始复习」+ 签到状态 |
+| api/review.ts | frontend/src/api/ | 7 个接口 |
+| views/ReviewView.vue | frontend/src/views/ | 复习页（两阶段） |
+| router/index.ts | **改既有** | 加 review 路由 |
+| HomeView.vue | **改既有** | 侧栏「开始复习」+ 到期徽标 |
 
 ```ts
 // api/review.ts
 import request from './request'
 
-export const getToday = (limit = 20) => request.get('/review/today', { params: { limit } })
+export const startSession = (categoryId?: string, count = 10) =>
+  request.post('/review/session/start', null, { params: { categoryId, count } })
 export const getSummary = () => request.get('/review/summary')
 export const rateCard = (cardId: string, rating: number) =>
   request.post(`/review/${cardId}/rating?rating=${rating}`)
@@ -797,48 +808,61 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { MdPreview } from 'md-editor-v3'
 import 'md-editor-v3/lib/preview.css'
-import { getToday, rateCard, getRandom, checkin, checkinStatus, todayRank } from '../api/review'
+import { startSession, rateCard, getRandom, checkin, checkinStatus, todayRank } from '../api/review'
+import { listCategory } from '../api/category'
 
 const router = useRouter()
 
-const loading = ref(true)
+const phase = ref<'setup' | 'review'>('setup')
+const loading = ref(false)
+const categories = ref<any[]>([])
+const categoryId = ref<string | undefined>(undefined)
+const count = ref(10)
+
 const queue = ref<any[]>([])
 const idx = ref(0)
 const showAnswer = ref(false)
 const rating = ref(false)
+
 const status = ref<{ checkedToday: boolean; streak: number; monthCount: number }>({ checkedToday: false, streak: 0, monthCount: 0 })
 const rank = ref<any[]>([])
 
 const current = computed(() => queue.value[idx.value] ?? null)
-const done = computed(() => !loading.value && (!current.value))
+const finished = computed(() => phase.value === 'review' && !current.value)
 
 const ratingOptions = [
   { value: 1, label: '忘记', cls: 'again' },
-  { value: 2, label: '困难', cls: 'hard' },
-  { value: 3, label: '良好', cls: 'good' },
-  { value: 4, label: '简单', cls: 'easy' },
+  { value: 2, label: '有点印象', cls: 'hard' },
+  { value: 3, label: '十拿九稳', cls: 'good' },
+  { value: 4, label: '完全背诵', cls: 'easy' },
 ]
 
-async function load() {
-  loading.value = true
-  try {
-    const [cards, st, rk]: any[] = await Promise.all([getToday(20), checkinStatus(), todayRank(10)])
-    queue.value = cards ?? []
-    idx.value = 0
-    showAnswer.value = false
-    status.value = st
-    rank.value = rk ?? []
-  } finally { loading.value = false }
+async function loadMeta() {
+  const [cs, st, rk]: any[] = await Promise.all([listCategory(), checkinStatus(), todayRank(10)])
+  categories.value = cs ?? []
+  status.value = st
+  rank.value = rk ?? []
 }
 
-onMounted(load)
+onMounted(loadMeta)
+
+async function start() {
+  loading.value = true
+  try {
+    const cards: any = await startSession(categoryId.value, count.value)
+    if (!cards?.length) { ElMessage.info('这个分类下还没有题目'); return }
+    queue.value = cards
+    idx.value = 0
+    showAnswer.value = false
+    phase.value = 'review'
+  } finally { loading.value = false }
+}
 
 async function submitRating(value: number) {
   if (!current.value?.cardId || rating.value) return
   rating.value = true
   try {
     await rateCard(current.value.cardId, value)
-    // 本地推进；评分后刷新榜单与签到状态
     idx.value++
     showAnswer.value = false
     const [st, rk]: any[] = await Promise.all([checkinStatus(), todayRank(10)])
@@ -858,15 +882,21 @@ async function randomOne() {
   queue.value = [c]
   idx.value = 0
   showAnswer.value = false
+  phase.value = 'review'
+}
+
+function backToSetup() {
+  phase.value = 'setup'
+  queue.value = []
+  idx.value = 0
 }
 </script>
 
 <template>
   <div class="page-head">
     <div>
-      <h1>今日复习</h1>
+      <h1>复习</h1>
       <p class="sub">
-        剩余 {{ Math.max(queue.length - idx, 0) }} 张 ·
         <span :class="{ on: status.checkedToday }">
           {{ status.checkedToday ? `已签到 · 连续 ${status.streak} 天` : '今天还没签到' }}
         </span>
@@ -880,10 +910,34 @@ async function randomOne() {
 
   <div class="layout">
     <section class="review-main">
-      <el-skeleton v-if="loading" :rows="8" animated />
+      <!-- 阶段一：准备 -->
+      <el-card v-if="phase === 'setup'" class="card setup" shadow="never">
+        <h2 class="setup-title">今天想复习哪一类？</h2>
+        <p class="hint">开始后会把该分类下的题目纳入复习体系，并抽取 {{ count }} 道组成卡片。</p>
 
+        <div class="cats">
+          <button type="button" class="cat-chip" :class="{ on: !categoryId }" @click="categoryId = undefined">全部</button>
+          <button v-for="c in categories" :key="c.id" type="button" class="cat-chip"
+            :class="{ on: categoryId === String(c.id) }" @click="categoryId = String(c.id)">
+            {{ c.name }}<span class="n">{{ c.questionCount }}</span>
+          </button>
+        </div>
+
+        <div class="count-row">
+          <span class="label">数量</span>
+          <el-radio-group v-model="count" size="small">
+            <el-radio-button :value="5">5</el-radio-button>
+            <el-radio-button :value="10">10</el-radio-button>
+            <el-radio-button :value="20">20</el-radio-button>
+          </el-radio-group>
+          <div class="grow" />
+          <el-button class="primary-btn" size="large" :loading="loading" @click="start">开始复习</el-button>
+        </div>
+      </el-card>
+
+      <!-- 阶段二：复习 -->
       <el-card v-else-if="current" class="card" shadow="never">
-        <div class="kicker">问 答 卡 片</div>
+        <div class="kicker">问 答 卡 片 · {{ idx + 1 }} / {{ queue.length }}</div>
         <h2 class="title">{{ current.title }}</h2>
 
         <div v-if="!showAnswer" class="self-check">
@@ -906,14 +960,16 @@ async function randomOne() {
         </template>
       </el-card>
 
-      <el-empty v-else description="今天的复习已经清空了">
+      <!-- 阶段二：完成 -->
+      <el-empty v-else description="这一轮复习完成">
         <div class="empty-btns">
-          <el-button class="primary-btn" @click="router.push('/question/list')">去题库看看</el-button>
-          <el-button @click="randomOne">随机来一道</el-button>
+          <el-button class="primary-btn" @click="start">再来一轮</el-button>
+          <el-button @click="backToSetup">换个分类</el-button>
+          <el-button @click="router.push('/question/list')">去题库</el-button>
         </div>
       </el-empty>
 
-      <div v-if="queue.length" class="progress-line">
+      <div v-if="phase === 'review' && queue.length" class="progress-line">
         <el-progress :percentage="Math.round((idx / Math.max(queue.length, 1)) * 100)"
           :stroke-width="8" :show-text="false" />
         <span class="muted">{{ idx }} / {{ queue.length }}</span>
@@ -945,10 +1001,24 @@ async function randomOne() {
 .layout { display: flex; gap: var(--sp-4); align-items: flex-start }
 .review-main { flex: 1; min-width: 0 }
 .card { border-radius: var(--r-lg); background: var(--card); padding: var(--sp-6) var(--sp-8) }
+.setup-title { margin: 0 0 6px; font-size: var(--fs-20); font-weight: 700 }
+.hint { color: var(--ink-3); font-size: var(--fs-13); margin: 0 }
+.cats { display: flex; gap: 8px; flex-wrap: wrap; margin: var(--sp-4) 0 }
+.cat-chip {
+  border: 1px solid var(--line); background: var(--card); color: var(--ink-2);
+  border-radius: var(--r-pill); padding: 7px 16px; font-size: var(--fs-13); cursor: pointer;
+  font-family: inherit; transition: all .15s;
+}
+.cat-chip:hover { border-color: var(--brand); color: var(--brand-deep) }
+.cat-chip.on { background: var(--brand-soft); border-color: var(--brand); color: var(--brand-deep); font-weight: 600 }
+.cat-chip .n { margin-left: 6px; font-size: var(--fs-11); color: var(--ink-3) }
+.count-row { display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--line); padding-top: var(--sp-4) }
+.count-row .label { font-size: var(--fs-12); color: var(--ink-3) }
+.count-row .grow { flex: 1 }
+
 .kicker { font-size: var(--fs-11); letter-spacing: 3px; color: var(--brand-deep) }
 .title { margin: 10px 0 18px; font-size: var(--fs-20); font-weight: 700; line-height: 1.5 }
 .self-check { padding: 26px 0 10px; display: flex; flex-direction: column; align-items: center; gap: 16px }
-.hint { color: var(--ink-3); font-size: var(--fs-13); margin: 0 }
 .answer { border-top: 1px solid var(--line); padding-top: var(--sp-4) }
 .answer :deep(.md-editor-preview) { font-size: 14.5px; line-height: 2; background: transparent }
 .answer :deep(.md-editor-preview pre) { background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--r-sm) }
@@ -957,8 +1027,7 @@ async function randomOne() {
 .rate-btns { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); flex-wrap: wrap }
 .rate-btn {
   border: 1px solid var(--line); background: var(--card); border-radius: var(--r-sm);
-  padding: 9px 22px; font-size: var(--fs-13); cursor: pointer; font-family: inherit;
-  transition: all .15s ease;
+  padding: 9px 20px; font-size: var(--fs-13); cursor: pointer; font-family: inherit; transition: all .15s ease;
 }
 .rate-btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-sm) }
 .rate-btn.again { color: #c0392b; border-color: #f0d3ce }
@@ -967,10 +1036,7 @@ async function randomOne() {
 .rate-btn.easy { color: #2e7d5b; border-color: #cfe8dc }
 .progress-line { display: flex; align-items: center; gap: 12px; margin-top: var(--sp-4) }
 .progress-line :deep(.el-progress) { flex: 1 }
-.rank {
-  width: 260px; flex-shrink: 0; background: var(--card); border: 1px solid var(--line);
-  border-radius: var(--r-lg); padding: var(--sp-4); box-shadow: var(--shadow-sm);
-}
+.rank { width: 260px; flex-shrink: 0; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); padding: var(--sp-4); box-shadow: var(--shadow-sm) }
 .rank h3 { margin: 0 0 10px; font-size: var(--fs-13); font-weight: 700 }
 .rank ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px }
 .rank li { display: flex; align-items: center; gap: 8px; font-size: var(--fs-12) }
@@ -978,23 +1044,27 @@ async function randomOne() {
 .rank .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .rank .score { color: var(--brand-deep); font-weight: 600 }
 .small { font-size: var(--fs-12) }
-.empty-btns { display: flex; gap: 10px; justify-content: center }
+.empty-btns { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap }
 
 @media (max-width: 900px) {
   .layout { flex-direction: column }
   .rank { width: 100% }
   .card { padding: var(--sp-4) }
+  .count-row { flex-wrap: wrap }
 }
 </style>
 ```
 
-**路由追加**（`router/index.ts` children）：
+**路由追加**：`{ path: 'review', component: () => import('../views/ReviewView.vue') }`
+
+**侧栏入口（HomeView）**：底部两个按钮——「开始复习」（带到期徽标）+「新建题目」（次要样式）；`dueCount` 来自 `/review/summary`，路由变化时刷新。
 
 ```ts
-{ path: 'review', component: () => import('../views/ReviewView.vue') },
+import { getSummary } from '../api/review'
+const dueCount = ref(0)
+function refreshDue() { getSummary().then((s: any) => { dueCount.value = s.dueCount ?? 0 }).catch(() => {}) }
+// 现有 watch(route.fullPath) 里追加 refreshDue()；onMounted 末尾也调用一次
 ```
-
-**侧栏入口**（HomeView，把底部主按钮改成"复习 + 新建"两枚）：
 
 ```vue
 <div class="side-actions">
@@ -1005,85 +1075,72 @@ async function randomOne() {
 </div>
 ```
 
-```ts
-// HomeView script 追加：到期数徽标（路由变化时刷新；onMounted 末尾加一行 refreshDue()）
-import { getSummary } from '../api/review'
-const dueCount = ref(0)
-function refreshDue() { getSummary().then((s: any) => { dueCount.value = s.dueCount ?? 0 }).catch(() => {}) }
-watch(() => route.fullPath, () => { refreshCategories(); refreshDue() })
-// HomeView 现有 onMounted 的末尾追加一行：
-refreshDue()
-```
-
 ```css
-/* HomeView style 追加 */
 .side-actions { display: flex; flex-direction: column; gap: 8px; margin-top: var(--sp-3) }
 .review-btn {
   position: relative; width: 100%; border: none; cursor: pointer; color: #fff;
   background: var(--brand-grad); font-size: var(--fs-14); font-weight: 700;
-  border-radius: var(--r-md); height: 42px;
-  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--r-md); height: 42px; display: flex; align-items: center; justify-content: center;
   box-shadow: 0 10px 22px rgba(59, 130, 196, .30);
 }
 .review-btn:hover { transform: translateY(-1px) }
 .review-btn .badge {
   position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
-  background: rgba(255, 255, 255, .22); border-radius: 999px;
-  font-size: var(--fs-11); padding: 1px 8px;
+  background: rgba(255, 255, 255, .22); border-radius: 999px; font-size: var(--fs-11); padding: 1px 8px;
 }
-.create-btn { background: var(--card); color: var(--ink); border: 1px solid var(--line); box-shadow: none }
-.create-btn:hover { border-color: var(--brand); color: var(--brand-deep) }
+.create-btn.secondary { background: var(--card); color: var(--ink); border: 1px solid var(--line); box-shadow: none }
+.create-btn.secondary:hover { border-color: var(--brand); color: var(--brand-deep) }
 ```
 
 ## 🧪 测试与验收
 
 | # | 用例 | 期望 |
 |---|---|---|
-| T1 | 新建一道题 | t_card 自动新增一张卡（state=1，due≈now，reps=0） |
-| T2 | 回填 SQL | 历史题全部有卡，重复执行不报错（INSERT IGNORE） |
-| T3 | GET /review/today | 返回 ≤20 张，按 due 升序；EXPLAIN 走 idx_user_due |
-| T4 | 评分=3（良好） | 卡片 due 变为约 10 分钟后；t_review_log 新增一行；reps+1 |
-| T5 | 评分=4（简单） | state 变为 2（REVIEW），due 变为 ~19 天后（数值见 1️⃣ 表） |
-| T6 | 评分=1（忘记） | due 约 1 分钟后；lapses+1 |
-| T7 | 非法评分（0/5） | 400「评分必须是 1~4」 |
-| T8 | 越权 | B 对 A 的 cardId 评分 → 404 |
-| T9 | 签到 | status.checkedToday=true，streak≥1；重复签到不重复计数（bit 幂等） |
-| T10 | 榜单 | 复习几次后 /rank/today 出现自己且分数=复习次数；昵称正确 |
-| T11 | 随机问答 | 返回一道题；题库为空时返回 data=null |
-| T12 | 删题 | 对应卡被删除，今日队列不再出现 |
+| T1 | 新建一道题 | **t_card 不新增**（v2 变更点：建题不建卡） |
+| T2 | 开始复习（分类 A） | A 下所有题都有卡；B 分类的题**没有**卡 |
+| T3 | 会话选题 | 到期卡优先（按 due 升序）；不足 count 时随机补足；返回数 = min(count, A 题数) |
+| T4 | 空分类开始复习 | 返回空列表（前端提示） |
+| T5 | 评分=3（十拿九稳） | due ≈ +10 分钟；t_review_log 新增；reps+1 |
+| T6 | 评分=4（完全背诵） | state=2（REVIEW）；due ≈ +19 天 |
+| T7 | 评分=1（忘记） | due ≈ +1 分钟；lapses+1 |
+| T8 | 非法评分（0/5） | 400「评分必须是 1~4」 |
+| T9 | 越权 | B 对 A 的 cardId 评分 → 404 |
+| T10 | 签到 | checkedToday=true、streak≥1；重复签到 bit 幂等 |
+| T11 | 榜单 | 复习 3 次后自己出现在今日榜且分数=3；昵称正确 |
+| T12 | 删题 | 对应卡被删除；再次开始会话不会出现该题 |
 
 **验收清单**：
 - [ ] 12 条全绿
-- [ ] Redis 里能看到 `wengu:checkin:*` 与 `wengu:rank:review:*`（`redis-cli -a redis123 KEYS 'wengu:*'`）
-- [ ] 浏览器：复习 5 张（混合四种评分）→ 进度条推进 → 清空后空态正常
-- [ ] 浏览器：签到 → 连续天数显示；刷新不丢
-- [ ] commit：`feat(phase5): FSRS复习与签到榜单`
+- [ ] 连续两次「开始复习」同分类：第一次全是新卡；第二次优先出现"刚才评过且已到期"的卡（评分=忘记/有点印象的卡几分钟后就到期）
+- [ ] 浏览器：选分类→开始→翻面→四档评分→进度推进→完成页→再来一轮
+- [ ] 签到/榜单刷新正常；侧栏徽标数=到期卡数
+- [ ] commit：`feat(phase5): FSRS复习会话+签到榜单`
 
 > **债务登记**：
-> 1. 今日队列上限 20 硬编码 → 第 7 章配额系统统一成用户配置
-> 2. 随机问答用 count+offset（大 offset 仍扫行）→ 第 7 章压测时量化，必要时改 id 池
-> 3. 榜单不落库（Redis 3 天过期）→ 后续做历史榜/周榜再建快照表
-> 4. 连续天数最多回溯 366 天（够用；跨年长连续需要更长窗口）
-> 5. 无 FSRS 参数优化（官方推荐用 py-fsrs/fsrs-rs 基于 review_log 训练）→ 结项章作为进阶方向
-> 6. `el-progress`/`el-skeleton` 等 Element 组件仍全量引入 → 第 9 章按需导入
+> 1. 会话不落库（刷新丢进度）→ 后续要"断点续复"需加 t_review_session
+> 2. 随机补足会让"未到期题"提前出现 → 这是为了凑够数量的取舍；若你更想严格，可改成"仅到期"（配置项留到第 7 章）
+> 3. 随机问答不参与评分（纯浏览）→ 后续可加"顺手评分"
+> 4. 榜单不落库（3 天过期）→ 后续做历史榜/周榜再建快照
+> 5. 无 FSRS 参数优化（官方建议用 review_log 训练）→ 结项章进阶
+> 6. Element 组件全量引入 → 第 9 章按需导入
 
 ## 📦 本章交付物
 
-后端：`review/{entity,mapper,service,controller,vo}` 共 15 文件 + QuestionService 两处挂接 + properties Redis 三项 + 两张新表 + 回填 SQL。
-前端：`api/review.ts` + `ReviewView.vue` + 路由 + 侧栏复习入口/徽标。
+后端：`review/{entity,mapper,service,controller,vo}` 15 文件 + QuestionService 两方法 + delete 清卡 + properties Redis 三项 + 两张新表。
+前端：`api/review.ts` + `ReviewView.vue`（两阶段）+ 路由 + 侧栏复习入口/徽标。
 依赖：java-fsrs 1.0.0、spring-boot-starter-data-redis（已装）。
 
 ## 🔗 关联八股
 
-- **FSRS 三参数**：difficulty（题多难）/ stability（记多牢）/ retrievability（当前可回忆概率）；间隔由目标保留率反推
-- FSRS vs SM-2 vs Leitner：为什么"固定 1/3/7 天"是错的；参数化调度
-- **BitMap**：签到用位图（1 bit/天，一个月 4 字节）；`BITCOUNT` 统计月签到；key 的 TTL 设计
-- **ZSet**：底层跳表 + 哈希表，`ZINCRBY`/`ZREVRANGE` O(logN)；与榜单、限流滑窗的关系（第 7 章限流会复用它）
-- 索引：`(user_id, due)` 联合索引支撑"今日队列"；EXPLAIN 验证
-- 事务：评分同时写卡+日志必须同事务；`rollbackFor`
-- 时间类型：`Instant`(UTC) 与 `LocalDateTime`(本地) 的转换陷阱（时区差 8 小时会让"到期"错位）
-- 幂等：重复签到靠 SETBIT 天然幂等；重复评分**不幂等**（会多算一次），前端按钮 loading 防连点
+- FSRS 三参数与目标保留率；FSRS vs SM-2（固定间隔为什么错）
+- **评分文案与算法映射**：Hard/Good/Easy 是回忆质量而非题目难度（产品语义影响数据质量）
+- BitMap：1 bit/天、`BITCOUNT`、key TTL 设计
+- ZSet：跳表 + 哈希；`ZINCRBY`/`ZREVRANGE`；与第 7 章限流滑窗的关系
+- 索引 `(user_id, due)`；EXPLAIN 验证会话选题
+- 事务：卡 + 日志同事务；`rollbackFor`
+- Instant/LocalDateTime 时区陷阱
+- 懒创建模式（lazy initialization）：把"建卡"从写路径移到读路径，减少无用数据
 
 ## 下章预告
 
-**07 · 缓存专题（Phase 6）**：给题目详情/今日队列/榜单上缓存，用 JMeter 压出穿透、击穿、雪崩，然后逐个修复——你会第一次拿到"压测前后对比"的硬数据。
+**07 · 缓存专题（Phase 6）**：题目详情/会话选题/榜单上缓存，JMeter 压出穿透、击穿、雪崩，再逐个修复——第一次拿到"压测前后对比"的硬数据。
