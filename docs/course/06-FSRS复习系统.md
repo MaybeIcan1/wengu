@@ -1,7 +1,7 @@
 # 06 · FSRS 复习系统（Phase 5）
 
-> 状态：⬜ 待开发 ｜ **v3（2026-10-24 需求变更：百词斩式"本轮回炉"——忘记/有点印象的卡在本轮内优先回归，直到十拿九稳）**
-> 沿革：v2 复习会话制（建题不建卡 + 到期优先/随机补足 + 评分文案重构）
+> 状态：✅ **已实现并验收（2026-10-24）** ｜ v3.1（实现回写：删题清卡改为事件驱动、月签到统计改逐位 getBit）
+> 沿革：v3 百词斩式本轮回炉；v2 复习会话制（建题不建卡 + 到期优先/随机补足 + 评分文案重构）
 > 变更点：
 > ① **建卡不再发生在"新建题目"时**——题库只是仓库；用户点「开始复习」并选择分类后，才为该分类下所有题目**懒建卡**
 > ② 会话选题 = **到期优先（due ≤ now）+ 随机补足**（既尊重调度，又保证每次凑够题）
@@ -380,10 +380,11 @@ public class ReviewService {
         }
     }
 
-    /** 删题时清卡 */
-    public void removeByQuestion(Long questionId) {
+    /** 题目被删除时清理卡片（事件驱动，避免与题目域循环依赖） */
+    @EventListener
+    public void onQuestionDeleted(QuestionDeletedEvent event) {
         cardMapper.delete(Wrappers.<ReviewCard>lambdaQuery()
-                .eq(ReviewCard::getQuestionId, questionId));
+                .eq(ReviewCard::getQuestionId, event.questionId()));
     }
 
     public ReviewSummaryVO summary() {
@@ -551,8 +552,13 @@ public class CheckinService {
             else break;
         }
 
-        Long monthCount = redis.opsForValue().bitCount(monthKey(uid, YearMonth.from(today)));
-        return new CheckinStatusVO(checkedToday, streak, monthCount == null ? 0 : monthCount.intValue());
+        YearMonth ym = YearMonth.from(today);
+        String mk = monthKey(uid, ym);
+        int monthCount = 0;
+        for (int d = 1; d <= ym.lengthOfMonth(); d++) {
+            if (Boolean.TRUE.equals(redis.opsForValue().getBit(mk, d - 1L))) monthCount++;
+        }
+        return new CheckinStatusVO(checkedToday, streak, monthCount);
     }
 
     private String monthKey(Long uid, YearMonth ym) {
@@ -637,9 +643,11 @@ package com.wengu.backend.review.vo;
 public record ReviewSummaryVO(int dueCount) {}
 ```
 
-**题目域挂接（结构动作：改 `QuestionServiceImpl`）**：
+**题目域挂接（结构动作：改 `QuestionServiceImpl` + 新建事件类）**：
 - **不要**在 `create()` 里建卡（v2 变更点）
-- `delete()` 末尾追加：`reviewService.removeByQuestion(id);`（注入 ReviewService，跨域 Service 调 Service）
+- 新建 `question/event/QuestionDeletedEvent.java`（`public record QuestionDeletedEvent(Long questionId) {}`）
+- `QuestionServiceImpl` 注入 `ApplicationEventPublisher events`，`delete()` 末尾追加：`events.publishEvent(new QuestionDeletedEvent(id));`
+- 为什么不用 `reviewService.removeByQuestion(id)` 直接调用？那会让 **QuestionService ↔ ReviewService 循环依赖**（ReviewService 也依赖 QuestionService）；事件解耦是标准解法
 
 ## 4️⃣ 接口编排层（结束时：Apifox 全流程可走）
 
@@ -1175,7 +1183,7 @@ function refreshDue() { getSummary().then((s: any) => { dueCount.value = s.dueCo
 
 - FSRS 三参数与目标保留率；FSRS vs SM-2（固定间隔为什么错）
 - **评分文案与算法映射**：Hard/Good/Easy 是回忆质量而非题目难度（产品语义影响数据质量）
-- BitMap：1 bit/天、`BITCOUNT`、key TTL 设计
+- BitMap：1 bit/天、key TTL 设计；`ValueOperations` 没有 `bitCount`（本例用逐位 `getBit` 统计，31 次调用代价可忽略）
 - ZSet：跳表 + 哈希；`ZINCRBY`/`ZREVRANGE`；与第 7 章限流滑窗的关系
 - 索引 `(user_id, due)`；EXPLAIN 验证会话选题
 - 事务：卡 + 日志同事务；`rollbackFor`

@@ -5,6 +5,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getMeApi } from '../api/user'
 import { listCategory, createCategory } from '../api/category'
+import { getSummary } from '../api/review'
 import { useUserStore } from '../stores/user'
 import CreateChoiceDialog from '../components/CreateChoiceDialog.vue'
 
@@ -12,12 +13,13 @@ const router = useRouter()
 const route = useRoute()
 const store = useUserStore()
 const categories = ref<any[]>([])
+const dueCount = ref(0)
 const showCreate = ref(false)
 
 const activeCategory = computed(() => (route.query.category ? String(route.query.category) : ''))
 
 // 💣 侧栏计数陈旧坑：SPA壳只在onMounted取数 → 导航级刷新
-watch(() => route.fullPath, () => { refreshCategories() })
+watch(() => route.fullPath, () => { refreshCategories(); refreshDue() })
 
 onMounted(async () => {
   try {
@@ -25,10 +27,15 @@ onMounted(async () => {
     store.nickname = me.nickname ?? store.nickname
   } catch { /* 401 已被拦截器接管 */ }
   refreshCategories()
+  refreshDue()
 })
 
 function refreshCategories() {
   listCategory().then((cs: any) => { categories.value = cs as any[] }).catch(() => {})
+}
+
+function refreshDue() {
+  getSummary().then((s: any) => { dueCount.value = s.dueCount ?? 0 }).catch(() => {})
 }
 
 function quickAddCat() {
@@ -87,9 +94,14 @@ function logout() {
         <div v-if="!categories.length" class="cat-hint">还没有分类，点右上角 + 新建</div>
       </div>
 
-      <button class="create-btn" type="button" @click="showCreate = true">
-        <span>＋ 新建题目</span>
-      </button>
+      <div class="side-actions">
+        <button class="review-btn" type="button" @click="router.push('/review')">
+          开始复习<span v-if="dueCount > 0" class="badge">{{ dueCount }}</span>
+        </button>
+        <button class="create-btn secondary" type="button" @click="showCreate = true">
+          <span>＋ 新建题目</span>
+        </button>
+      </div>
     </el-aside>
 
     <el-container class="right">
@@ -145,7 +157,7 @@ function logout() {
 .cat-hint { padding: 10px; font-size: var(--fs-12); color: var(--ink-3); line-height: 1.8 }
 
 .create-btn {
-  margin-top: var(--sp-3); width: 100%; border: none; cursor: pointer;
+  width: 100%; border: none; cursor: pointer;
   background: var(--brand-grad); color: #fff; font-size: var(--fs-14); font-weight: 700;
   border-radius: var(--r-md); height: 42px;
   display: flex; align-items: center; justify-content: center;
@@ -153,6 +165,24 @@ function logout() {
   transition: transform .15s, box-shadow .15s;
 }
 .create-btn:hover { transform: translateY(-1px); box-shadow: 0 14px 28px rgba(59, 130, 196, .36) }
+
+.side-actions { display: flex; flex-direction: column; gap: 8px; margin-top: var(--sp-3) }
+.review-btn {
+  position: relative; width: 100%; border: none; cursor: pointer; color: #fff;
+  background: var(--brand-grad); font-size: var(--fs-14); font-weight: 700;
+  border-radius: var(--r-md); height: 42px;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 10px 22px rgba(59, 130, 196, .30);
+  transition: transform .15s;
+}
+.review-btn:hover { transform: translateY(-1px) }
+.review-btn .badge {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  background: rgba(255, 255, 255, .22); border-radius: 999px;
+  font-size: var(--fs-11); padding: 1px 8px;
+}
+.create-btn.secondary { background: var(--card); color: var(--ink); border: 1px solid var(--line); box-shadow: none }
+.create-btn.secondary:hover { border-color: var(--brand); color: var(--brand-deep); box-shadow: none }
 
 .right { min-width: 0 }
 .head {

@@ -9,12 +9,15 @@ import com.wengu.backend.question.entity.*;
 import com.wengu.backend.question.mapper.QuestionMapper;
 import com.wengu.backend.question.mapper.QuestionTagMapper;
 import com.wengu.backend.question.query.QuestionPageQuery;
+import com.wengu.backend.question.event.QuestionDeletedEvent;
 import com.wengu.backend.question.vo.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
@@ -22,6 +25,7 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
     private final TagService tagService;
     private final CategoryService categoryService;
     private final QuestionTagMapper questionTagMapper;
+    private final ApplicationEventPublisher events;
     @Override
     @Transactional(rollbackFor = Exception.class)     // ★ 建题=三处写库，必须同生共死
     public Long create(QuestionCreateDTO dto) {
@@ -134,5 +138,22 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         if (q == null) throw new BizException(404, "题目不存在");
         removeById(id);                                  // 逻辑删除（deleted=1）
         questionTagMapper.unlinkAll(id);                 // ★ 桥表无deleted，物理清
+        events.publishEvent(new QuestionDeletedEvent(id));   // 复习域监听：清理卡片
+    }
+
+    @Override
+    public List<Question> listByCategory(Long categoryId) {
+        return lambdaQuery()
+                .eq(categoryId != null, Question::getCategoryId, categoryId)
+                .orderByDesc(Question::getUpdatedTime)
+                .list();
+    }
+
+    @Override
+    public Question randomOne() {
+        long total = lambdaQuery().count();
+        if (total == 0) return null;
+        long offset = ThreadLocalRandom.current().nextLong(total);
+        return lambdaQuery().last("limit 1 offset " + offset).one();
     }
 }

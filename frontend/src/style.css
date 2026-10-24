@@ -119,4 +119,5 @@ h1, h2, h3, h4 { font-weight: 700 }
   transition: opacity .15s ease;
 }
 .link-op:hover { background: transparent; color: var(--el-color-primary-dark-2) }
-.link-op.danger { color: var(--el-color-danger) }`n.link-op.danger:hover { color: var(--el-color-danger-dark-2) }
+.link-op.danger { color: var(--el-color-danger) }
+.link-op.danger:hover { color: var(--el-color-danger-dark-2) }
